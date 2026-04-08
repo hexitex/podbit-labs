@@ -1,0 +1,85 @@
+{
+  "port": 4715,
+  "database": { "path": "../db/nn-lab.db" },
+  "auth": {},
+  "sandbox": {
+    "pythonPath": "python",
+    "executionTimeoutMs": 17200000,
+    "maxOutputBytes": 10485760,
+    "maxCodeLength": 100000,
+    "networkKillSwitch": false
+  },
+  "execution": {
+    "retryLimit": 3,
+    "artifactTtlSeconds": 604800,
+    "maxConcurrent": 2,
+    "jobTimeoutMs": 20800000,
+    "maxArtifactBytes": 104857600,
+    "resourceLock": true,
+    "defaultEpochCeiling": {
+      "real": 30,
+      "synthetic": 200
+    }
+  },
+  "podbit": {
+    "url": "http://localhost:4710",
+    "subsystem": "lab:d547e608-0a99-43cb-979d-7230bd0caaa1"
+  },
+  "_doc_models": "LLM calls route through Podbit via the `podbit` block above. The `models` block is a fallback only — uncomment and fill in if running standalone without Podbit.",
+  "_models_disabled": {
+    "codegen": {
+      "provider": "openai-compatible",
+      "endpoint": "https://api.example.com/v1",
+      "model": "your-model-id",
+      "apiKey": "YOUR_API_KEY_HERE",
+      "maxTokens": 16384,
+      "temperature": 0.15,
+      "timeoutMs": 600000,
+      "mergeSystemPrompt": true,
+      "stripThinking": true,
+      "noThink": false
+    },
+    "evaluation": {
+      "provider": "openai-compatible",
+      "endpoint": "https://api.example.com/v1",
+      "model": "your-model-id",
+      "apiKey": "YOUR_API_KEY_HERE",
+      "maxTokens": 16384,
+      "temperature": 0.1,
+      "timeoutMs": 600000,
+      "mergeSystemPrompt": true,
+      "stripThinking": true,
+      "noThink": false
+    }
+  },
+  "capabilities": {
+    "specTypes": {
+      "nn_training_profile": "Train a single neural network configuration and collect measurements (loss curve, accuracy, gradient stats, weight norms, sparsity distribution). DATASET RULE: Default to synthetic_quadratic or synthetic_regression. Use MNIST only if real classification data is needed. CIFAR-10 is ONLY for claims that explicitly require colour/multi-channel images.",
+      "nn_paired_comparison": "Train 2+ configurations with matched seeds and compute cross-condition measurements (convergence speed ratio, accuracy difference, sparsity divergence, gradient divergence). Use when comparing configurations. DATASET RULE: Prefer synthetic datasets — most comparison claims (optimizer behaviour, architecture differences, hyperparameter sensitivity) are testable on synthetic_quadratic/synthetic_regression without real data.",
+      "nn_sparsity_profile": "Train with a sparsity method and measure per-layer sparsity distribution, accuracy impact, and gradient stats. DATASET RULE: Use MNIST or Fashion-MNIST — sparsity effects are observable on small datasets. Avoid CIFAR-10 unless the claim specifically requires multi-channel convolutions.",
+      "nn_optimizer_dynamics": "Train on a synthetic loss surface and collect optimizer-specific measurements: effective LR trajectories, gradient stats, Hessian top eigenvalue. Use for optimizer behaviour, LR adaptation, loss landscape geometry — NOT task performance. ALWAYS use synthetic_quadratic or synthetic_regression.",
+      "nn_architecture_scaling": "Train configurations varying in depth/width, measuring how accuracy, convergence, gradient stats, weight norms change with scale. DATASET RULE: Use MNIST or synthetic datasets. Scaling behaviour is observable without large datasets.",
+      "nn_codegen": "Generate custom PyTorch training code via LLM for experiments beyond fixed menus — custom architectures, activations, loss functions, optimizers, training procedures, novel measurements. DATASET RULE: Always use the smallest dataset that answers the question. Default to synthetic_quadratic/synthetic_regression. MNIST only when real data is needed. CIFAR-10 is a last resort for claims that explicitly demand colour images."
+    },
+    "queueLimit": 100,
+    "artifactTtlSeconds": 604800,
+    "features": ["deterministic-codegen", "llm-codegen", "gpu-training", "chart-generation"],
+    "architectures": ["mlp", "cnn", "cnn_depthwise_separable", "resnet", "transformer_tiny"],
+    "datasets": ["mnist", "cifar10", "fashion_mnist", "synthetic_quadratic", "synthetic_regression"],
+    "optimizers": ["sgd", "adam", "rmsprop", "lbfgs"],
+    "lr_schedules": ["constant", "cosine", "cyclical", "step"],
+    "measurements": [
+      "loss_curve", "convergence_epoch", "final_accuracy",
+      "sparsity_by_layer", "gradient_stats_by_layer", "effective_lr_by_layer",
+      "weight_norm_by_layer", "hessian_top_eigenvalue", "wall_clock_time"
+    ],
+    "comparison_measurements": [
+      "convergence_speed_ratio", "final_accuracy_difference",
+      "sparsity_distribution_divergence", "gradient_stat_divergence"
+    ],
+    "sparsity_methods": ["unstructured", "structured_2_4", "magnitude"],
+    "modifications": ["bottleneck", "dropout", "weight_decay", "batch_norm", "layer_norm"],
+    "max_runs": 10,
+    "default_runs": 3
+  }
+}

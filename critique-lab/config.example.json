@@ -1,0 +1,56 @@
+{
+  "_doc": "Critique Lab — example config. Copy to config.json and customize. Both .env and config.json are gitignored.",
+  "_doc_models": "STRONGLY RECOMMENDED: leave the `models` block out and route through Podbit via `podbit.url` below. Podbit owns model assignment, semaphore-based concurrency, rate-limit cooldowns, budget tracking, and per-subsystem prompt/temperature config. Critique-lab is LLM-only (no sandbox compute) so the model choice matters even more — use the assignment system, not a hardcoded apiKey.",
+  "_doc_recommended_setup": "1. Run Podbit with your model registry configured (Models page). 2. Assign a model to the `lab:critique-lab` subsystem on the Podbit Models page. 3. Set PODBIT_URL in critique-lab/.env to point at your Podbit API (default http://localhost:4710). 4. Delete or comment out the entire `models` block below. 5. Done — every critique call now flows through Podbit's semaphore.",
+
+  "port": 4716,
+  "auth": {},
+
+  "sandbox": {
+    "pythonPath": "python",
+    "executionTimeoutMs": 5000,
+    "maxOutputBytes": 65536,
+    "maxCodeLength": 1000,
+    "networkKillSwitch": false
+  },
+
+  "execution": {
+    "retryLimit": 1,
+    "artifactTtlSeconds": 604800,
+    "maxConcurrent": 4,
+    "jobTimeoutMs": 300000,
+    "maxArtifactBytes": 1048576,
+    "resourceLock": false
+  },
+
+  "podbit": {
+    "_doc": "When set, lab-core routes ALL LLM calls through Podbit's /api/llm/call proxy. The `subsystem` is the model registry assignment slot — assign a model to it on the Podbit Models page. With this configured, the `models` block below can be removed entirely.",
+    "url": "http://localhost:4710",
+    "subsystem": "lab:critique-lab"
+  },
+
+  "capabilities": {
+    "specTypes": {
+      "node_critique": "Evaluate a knowledge graph node for quality. Assesses: specificity (vague vs precise), novelty (does it add insight beyond its sources?), grounding (supported by evidence or handwaving?), falsifiability (could it be tested or contradicted?), clarity (well-stated?). Returns a verdict: supported (high-value node), refuted (low-value — should be archived or reworked), inconclusive (needs improvement). No computation — pure LLM analysis."
+    },
+    "queueLimit": 20,
+    "artifactTtlSeconds": 604800,
+    "features": ["llm-critique", "no-compute"]
+  },
+
+  "_doc_models_block": "FALLBACK ONLY — uncomment if you cannot route through Podbit (e.g. standalone smoke test, CI without a Podbit instance). Hits the provider directly with no semaphore, no budget, no rate-limit cooldown. NEVER commit a real apiKey here — the file is gitignored locally but using env vars is safer (LLM_API_KEY overrides the apiKey field).",
+  "_models_disabled": {
+    "codegen": {
+      "provider": "openai-compatible",
+      "endpoint": "https://api.example.com/v1",
+      "model": "your-model-id",
+      "apiKey": "YOUR_API_KEY_HERE",
+      "maxTokens": 4096,
+      "temperature": 0.3,
+      "timeoutMs": 120000,
+      "mergeSystemPrompt": true,
+      "stripThinking": true,
+      "noThink": false
+    }
+  }
+}

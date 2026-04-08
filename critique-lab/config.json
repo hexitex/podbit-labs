@@ -1,0 +1,48 @@
+{
+  "port": 4716,
+  "database": { "path": "../db/critique-lab.db" },
+  "auth": {},
+  "sandbox": {
+    "pythonPath": "python",
+    "executionTimeoutMs": 500000,
+    "maxOutputBytes": 65536,
+    "maxCodeLength": 1000,
+    "networkKillSwitch": false
+  },
+  "execution": {
+    "retryLimit": 1,
+    "artifactTtlSeconds": 604800,
+    "maxConcurrent": 4,
+    "jobTimeoutMs": 300000,
+    "maxArtifactBytes": 1048576,
+    "resourceLock": false
+  },
+  "podbit": {
+    "url": "http://localhost:4710",
+    "subsystem": "lab:05ee5e69-da3b-49a1-904c-5d5c756b01b1"
+  },
+  "_doc_models": "LLM calls route through Podbit via the `podbit` block above. The `models` block is a fallback only — uncomment and fill in if running standalone without Podbit.",
+  "_models_disabled": {
+    "codegen": {
+      "provider": "openai-compatible",
+      "endpoint": "https://api.example.com/v1",
+      "model": "your-model-id",
+      "apiKey": "YOUR_API_KEY_HERE",
+      "maxTokens": 4096,
+      "temperature": 0.3,
+      "timeoutMs": 300000,
+      "mergeSystemPrompt": true,
+      "stripThinking": true,
+      "noThink": false
+    }
+  },
+  "capabilities": {
+    "specTypes": {
+      "node_critique": "Evaluate a knowledge graph node for quality. Assesses: specificity (vague vs precise), novelty (does it add insight beyond its sources?), grounding (supported by evidence or handwaving?), falsifiability (could it be tested or contradicted?), clarity (well-stated?). Returns a verdict: supported (high-value node), refuted (low-value — should be archived or reworked), inconclusive (needs improvement). No computation — pure LLM analysis.",
+      "experiment_review": "Review a lab experiment's methodology and verdict validity. Assesses whether the experiment actually tests the claim (operationalization mapping), checks for confounds (multiple uncontrolled variables), and validates whether the verdict follows from the data. Returns an action: confirm (methodology sound, verdict stands), correct (methodology flawed, provides corrected verdict), or retest (needs redesign, provides guidance). Receives: original claim content, experiment spec, lab verdict with confidence, generated code, and execution output."
+    },
+    "queueLimit": 20,
+    "artifactTtlSeconds": 604800,
+    "features": ["llm-critique", "no-compute", "experiment-review"]
+  }
+}

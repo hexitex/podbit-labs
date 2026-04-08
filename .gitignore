@@ -1,0 +1,33 @@
+# Secrets & credentials
+.env
+.env.*
+*.key
+*.pem
+
+# Node
+node_modules/
+package-lock.json
+
+# Build output
+dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Lab runtime data (databases, datasets, generated artifacts)
+**/artifacts/
+**/datasets/
+**/logs/
+**/results/
+**/tests/
+**/data/
+db/*.db
+db/*.db-wal
+db/*.db-shm

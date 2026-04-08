@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab Queue</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 16px; font-size: 14px; }
+  h1 { font-size: 18px; font-weight: 600; margin-bottom: 12px; color: #fff; display: flex; align-items: center; gap: 10px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.ok { background: #22c55e; }
+  .dot.err { background: #ef4444; }
+  .dot.connecting { background: #f59e0b; }
+  .stats { display: flex; gap: 16px; margin-bottom: 16px; font-size: 12px; color: #888; }
+  .stats span { background: #161616; padding: 4px 10px; border-radius: 4px; }
+  .tabs { display: flex; gap: 2px; margin-bottom: 12px; }
+  .tab { padding: 6px 14px; background: #161616; border: none; color: #888; cursor: pointer; font-size: 12px; border-radius: 4px 4px 0 0; }
+  .tab.active { background: #1e1e1e; color: #fff; }
+  table { width: 100%; border-collapse: collapse; background: #1e1e1e; border-radius: 6px; overflow: hidden; }
+  th { text-align: left; padding: 8px 12px; font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #2a2a2a; }
+  td { padding: 8px 12px; border-bottom: 1px solid #1a1a1a; font-size: 13px; }
+  tr:last-child td { border-bottom: none; }
+  tr.job-row:hover { background: #252525; }
+  .status { padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .status.queued { background: #1e3a5f; color: #60a5fa; }
+  .status.running { background: #1a3a1a; color: #4ade80; }
+  .status.completed { background: #1a2e1a; color: #22c55e; }
+  .status.failed { background: #3a1a1a; color: #f87171; }
+  .btn { padding: 4px 10px; border: 1px solid #333; background: #1a1a1a; color: #ccc; border-radius: 3px; cursor: pointer; font-size: 11px; }
+  .btn:hover { background: #2a2a2a; border-color: #555; }
+  .btn.danger { border-color: #7f1d1d; color: #f87171; }
+  .btn.danger:hover { background: #2a1010; }
+  .hypothesis { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #aaa; }
+  .spec-type { color: #a78bfa; font-family: monospace; font-size: 12px; }
+  .job-id { font-family: monospace; font-size: 11px; color: #666; }
+  .time { color: #666; font-size: 12px; }
+  .empty { text-align: center; padding: 32px; color: #444; }
+  .refresh { font-size: 11px; color: #444; cursor: pointer; margin-left: auto; }
+  .refresh:hover { color: #888; }
+  .actions { display: flex; gap: 4px; }
+  .error-summary { color: #f87171; font-size: 12px; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .error-summary:hover { color: #fca5a5; }
+  .trace-row td { padding: 0; border-bottom: 1px solid #1a1a1a; }
+  .trace-panel { background: #111; border-left: 3px solid #7f1d1d; margin: 0; overflow: hidden; transition: max-height 0.2s ease; }
+  .trace-panel.collapsed { max-height: 0; }
+  .trace-panel.expanded { max-height: 600px; }
+  .trace-content { padding: 12px 16px; font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace; font-size: 12px; line-height: 1.5; color: #e0e0e0; white-space: pre-wrap; word-break: break-word; overflow-y: auto; max-height: 580px; }
+  .trace-content .trace-error { color: #f87171; }
+  .trace-content .trace-label { color: #666; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; display: block; }
+  .trace-content .trace-section { margin-bottom: 12px; }
+  .trace-content .trace-section:last-child { margin-bottom: 0; }
+  .verdict-col { font-size: 12px; font-weight: 600; }
+  .verdict-col.supported { color: #22c55e; }
+  .verdict-col.refuted { color: #f87171; }
+  .verdict-col.inconclusive { color: #f59e0b; }
+  .verdict-col.error { color: #ef4444; }
+  .duration { color: #666; font-size: 11px; font-family: monospace; }
+  .stage-info { font-size: 11px; color: #888; font-style: italic; }
+  .stage-info .stage-name { color: #60a5fa; }
+  .stage-info .stage-attempt { color: #a78bfa; }
+  .stage-info .stage-error { color: #f87171; }
+  .sse-status { font-size: 10px; padding: 2px 6px; border-radius: 3px; margin-left: 8px; }
+  .sse-status.live { background: #1a2e1a; color: #4ade80; }
+  .sse-status.disconnected { background: #3a1a1a; color: #f87171; }
+</style>
+</head>
+<body>
+
+<h1>
+  <span class="dot" id="health-dot"></span>
+  <span id="lab-name">Lab Queue</span>
+  <span class="sse-status disconnected" id="sse-status">connecting</span>
+  <span class="refresh" id="refresh-btn">&#8635; refresh</span>
+</h1>
+
+<div class="stats" id="stats"></div>
+
+<div class="tabs">
+  <button class="tab active" data-filter="active">Active</button>
+  <button class="tab" data-filter="all">All</button>
+  <button class="tab" data-filter="completed">Completed</button>
+  <button class="tab" data-filter="failed">Failed</button>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Type</th>
+      <th>Hypothesis</th>
+      <th>Status</th>
+      <th>Verdict</th>
+      <th>Error</th>
+      <th>Time</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody id="jobs"></tbody>
+</table>
+
+<script>
+const BASE = window.location.origin;
+let currentFilter = 'active';
+let allJobs = [];
+const expandedTraces = new Set();
+const traceCache = {};
+const jobStages = {};
+
+async function fetchJson(path) {
+  const r = await fetch(BASE + path);
+  return r.json();
+}
+
+// ── SSE ──────────────────────────────────────────────────────────────────
+let evtSource = null;
+function connectSSE() {
+  if (evtSource) evtSource.close();
+  evtSource = new EventSource(BASE + '/events');
+  const badge = document.getElementById('sse-status');
+
+  evtSource.addEventListener('connected', (e) => {
+    badge.textContent = 'live';
+    badge.className = 'sse-status live';
+    const data = JSON.parse(e.data);
+    if (data.service) {
+      document.getElementById('lab-name').textContent = data.service + ' Queue';
+      document.title = data.service + ' Queue';
+    }
+  });
+
+  evtSource.addEventListener('job:queued', (e) => {
+    const d = JSON.parse(e.data);
+    jobStages[d.jobId] = { stage: 'queued' };
+    refreshSmart();
+  });
+
+  evtSource.addEventListener('job:started', (e) => {
+    const d = JSON.parse(e.data);
+    jobStages[d.jobId] = { stage: 'starting', specType: d.specType };
+    updateJobInPlace(d.jobId, { status: 'running' });
+  });
+
+  evtSource.addEventListener('job:stage', (e) => {
+    const d = JSON.parse(e.data);
+    jobStages[d.jobId] = d;
+    renderJobs();
+  });
+
+  evtSource.addEventListener('job:finished', (e) => {
+    const d = JSON.parse(e.data);
+    delete jobStages[d.jobId];
+    updateJobInPlace(d.jobId, { status: d.status, verdict: d.verdict, confidence: d.confidence, error: d.error, executionTimeMs: d.executionTimeMs });
+    refreshHealth();
+  });
+
+  evtSource.onerror = () => {
+    badge.textContent = 'disconnected';
+    badge.className = 'sse-status disconnected';
+  };
+}
+
+function updateJobInPlace(jobId, updates) {
+  const job = allJobs.find(j => j.id === jobId);
+  if (job) {
+    Object.assign(job, updates);
+    renderJobs();
+  } else {
+    refreshSmart();
+  }
+}
+
+// ── Data fetching ────────────────────────────────────────────────────────
+async function refreshHealth() {
+  try {
+    const health = await fetchJson('/health');
+    document.getElementById('health-dot').className = 'dot ' + (health.status === 'ok' ? 'ok' : 'err');
+    document.getElementById('stats').innerHTML = `
+      <span>Queue: ${health.queueDepth}</span>
+      <span>Running: ${health.running}</span>
+      <span>Avg: ${health.avgExecutionMs > 0 ? Math.round(health.avgExecutionMs / 1000) + 's' : '\u2014'}</span>
+      <span>Uptime: ${Math.round(health.uptime / 60)}m</span>
+    `;
+  } catch {
+    document.getElementById('health-dot').className = 'dot err';
+  }
+}
+
+async function refreshSmart() {
+  try {
+    const [jobsRes] = await Promise.all([fetch(BASE + '/jobs'), refreshHealth()]);
+    if (jobsRes.ok) {
+      allJobs = await jobsRes.json();
+      renderJobs();
+    }
+  } catch {
+    document.getElementById('health-dot').className = 'dot err';
+  }
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────
+const STAGE_LABELS = {
+  queued: 'queued',
+  starting: 'starting...',
+  codegen: 'generating code',
+  codegen_failed: 'codegen failed, retrying',
+  executing: 'running experiment',
+  exec_failed: 'execution failed, retrying',
+  evaluating: 'evaluating results',
+};
+
+function renderJobs() {
+  const tbody = document.getElementById('jobs');
+  let filtered = allJobs;
+  if (currentFilter === 'active') filtered = allJobs.filter(j => j.status === 'queued' || j.status === 'running');
+  else if (currentFilter !== 'all') filtered = allJobs.filter(j => j.status === currentFilter);
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">No jobs</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(j => {
+    const spec = j.spec ? (typeof j.spec === 'string' ? JSON.parse(j.spec) : j.spec) : null;
+    const specType = spec?.specType || '\u2014';
+    const hypothesis = spec?.hypothesis || '\u2014';
+    const created = j.created_at || j.createdAt || '';
+    const shortTime = created ? new Date(created + 'Z').toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '\u2014';
+    const canCancel = j.status === 'queued' || j.status === 'running';
+    const hasError = j.error && j.status === 'failed';
+    const isExpanded = expandedTraces.has(j.id);
+    const verdict = j.verdict || '\u2014';
+    const verdictClass = j.verdict ? j.verdict : '';
+    const duration = j.executionTimeMs ? formatDuration(j.executionTimeMs) : '\u2014';
+    const errorPreview = hasError ? j.error.split('\n').pop() || j.error : '';
+
+    // Live stage info for running jobs
+    const stage = jobStages[j.id];
+    let stageHtml = '';
+    if (stage && j.status === 'running') {
+      const label = STAGE_LABELS[stage.stage] || stage.stage;
+      const attempt = stage.attempt ? ` <span class="stage-attempt">${stage.attempt}/${stage.maxAttempts}</span>` : '';
+      const err = stage.error ? ` <span class="stage-error">${esc(stage.error.slice(0, 50))}</span>` : '';
+      stageHtml = `<br><span class="stage-info"><span class="stage-name">${label}</span>${attempt}${err}</span>`;
+    }
+
+    let rows = `<tr class="job-row">
+      <td class="job-id" title="${j.id}">${j.id.slice(0, 8)}</td>
+      <td class="spec-type">${esc(specType)}</td>
+      <td class="hypothesis" title="${esc(hypothesis)}">${esc(hypothesis.slice(0, 60))}</td>
+      <td><span class="status ${j.status}">${j.status}</span>${stageHtml}</td>
+      <td class="verdict-col ${verdictClass}">${verdict}</td>
+      <td>${hasError ? `<span class="error-summary" onclick="toggleTrace('${j.id}')" title="${esc(j.error)}">${esc(errorPreview.slice(0, 60))}</span>` : '\u2014'}</td>
+      <td class="duration">${duration}</td>
+      <td class="actions">
+        ${canCancel ? `<button class="btn danger" onclick="cancelJob('${j.id}')">&#10005;</button>` : ''}
+        ${hasError ? `<button class="btn" onclick="toggleTrace('${j.id}')">${isExpanded ? 'hide' : 'trace'}</button>` : ''}
+        ${j.status === 'completed' || j.status === 'failed' ? `<button class="btn" onclick="viewResult('${j.id}')">view</button>` : ''}
+      </td>
+    </tr>`;
+
+    if (hasError) {
+      const cached = traceCache[j.id];
+      const traceHtml = cached ? formatTrace(cached) : (isExpanded ? '<span style="color:#666">Loading...</span>' : '');
+      rows += `<tr class="trace-row"><td colspan="8"><div class="trace-panel ${isExpanded ? 'expanded' : 'collapsed'}"><div class="trace-content" id="trace-${j.id}">${traceHtml}</div></div></td></tr>`;
+    }
+
+    return rows;
+  }).join('');
+
+  for (const id of expandedTraces) {
+    if (!traceCache[id]) loadTrace(id);
+  }
+}
+
+function formatDuration(ms) {
+  if (ms < 1000) return ms + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  return Math.round(ms / 60000) + 'm ' + Math.round((ms % 60000) / 1000) + 's';
+}
+
+function formatTrace(trace) {
+  let html = '';
+  if (trace.error) {
+    html += `<div class="trace-section"><span class="trace-label">Error</span><span class="trace-error">${esc(trace.error)}</span></div>`;
+  }
+  if (trace.stderr) {
+    html += `<div class="trace-section"><span class="trace-label">stderr</span>${esc(trace.stderr)}</div>`;
+  }
+  if (trace.stdout) {
+    html += `<div class="trace-section"><span class="trace-label">stdout</span>${esc(trace.stdout)}</div>`;
+  }
+  if (trace.meta) {
+    html += `<div class="trace-section"><span class="trace-label">Execution Meta</span>${esc(trace.meta)}</div>`;
+  }
+  return html || '<span style="color:#666">No trace data available</span>';
+}
+
+async function loadTrace(id) {
+  const trace = {};
+  const job = allJobs.find(j => j.id === id);
+  if (job?.error) trace.error = job.error;
+  const fetches = [
+    fetch(BASE + '/artifacts/' + id + '/stderr.txt').then(r => r.ok ? r.text() : null).then(t => { if (t && t !== '(empty)') trace.stderr = t; }).catch(() => {}),
+    fetch(BASE + '/artifacts/' + id + '/stdout.txt').then(r => r.ok ? r.text() : null).then(t => { if (t && t !== '(empty)') trace.stdout = t; }).catch(() => {}),
+    fetch(BASE + '/artifacts/' + id + '/execution_meta.json').then(r => r.ok ? r.text() : null).then(t => { if (t) trace.meta = t; }).catch(() => {}),
+  ];
+  await Promise.all(fetches);
+  traceCache[id] = trace;
+  const el = document.getElementById('trace-' + id);
+  if (el) el.innerHTML = formatTrace(trace);
+}
+
+function toggleTrace(id) {
+  if (expandedTraces.has(id)) {
+    expandedTraces.delete(id);
+  } else {
+    expandedTraces.add(id);
+  }
+  renderJobs();
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+async function cancelJob(id) {
+  if (!confirm('Cancel this job?')) return;
+  try {
+    await fetch(BASE + '/jobs/' + id + '/cancel', { method: 'POST' });
+    setTimeout(refreshSmart, 300);
+  } catch(e) { alert('Failed: ' + e.message); }
+}
+
+function viewResult(id) {
+  window.open(BASE + '/result/' + id, '_blank');
+}
+
+// Tabs
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    currentFilter = tab.dataset.filter;
+    renderJobs();
+  });
+});
+
+document.getElementById('refresh-btn').addEventListener('click', refreshSmart);
+
+// ── Init ─────────────────────────────────────────────────────────────────
+refreshSmart();
+connectSSE();
+// Fallback poll at 30s in case SSE drops
+setInterval(refreshSmart, 30000);
+</script>
+</body>
+</html>

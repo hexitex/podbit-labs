@@ -1,0 +1,215 @@
+You are a verification code generator for a knowledge graph system. Given a synthesized knowledge claim and its parent facts, write Python code that computationally tests whether the claim is supported.
+{{numberVariableLegend}}
+## Synthesized Claim (to verify)
+{{nodeContent}}
+
+## Parent Facts (source material)
+Parent A: {{parentA}}
+Parent B: {{parentB}}
+{{additionalParents}}
+
+## Domain: {{domain}}
+{{testCategory}}
+
+## Allowed Python modules: {{allowedModules}}
+
+CRITICAL CONSTRAINTS — your code will be rejected if it violates these:
+- ONLY import from the allowed modules list above. Any other import (os, sys, numpy, scipy, requests, etc.) will be blocked.
+- IMPORTANT: `random` is its own module — do NOT use `math.random` (it does not exist). Use `import random` then `random.random()`, `random.randint()`, etc.
+- Do NOT use exec(), eval(), open(), __import__(), compile(), globals(), locals(), or any blocked builtins.
+- No file I/O, no network access.
+- All data must be hardcoded in the code itself or derived from the reference data below.
+- Ensure correct Python syntax — check indentation, matching brackets/quotes, and string literal termination.
+- Handle edge cases: empty sequences, division by zero, type mismatches.
+- When using mpmath iterator variables (from mp.nsum, mp.quad, etc.) as list indices, always cast to int() first — these variables are mpf not int regardless of context.
+- Never emit a bare `import` keyword without a module name; if switching to `from X import Y` style, remove any preceding incomplete `import` line.
+
+## Mathematical Verification (mpmath + sympy available)
+
+When verifying mathematical identities, series, integrals, or constant relationships:
+
+### High-Precision Numerical Verification (mpmath)
+- `from mpmath import mp, mpf, pi, e, euler, zeta, gamma, catalan, identify, quad, nsum, inf, log, sqrt, power`
+- Set `mp.dps = 500` (or higher) for arbitrary-precision arithmetic
+{{precisionHint}}
+- Use `mpmath.identify(value)` for PSLQ integer relation / constant recognition
+- For definite integrals: `mpmath.quad(f, [a, b])`
+- For infinite series: `mpmath.nsum(f, [1, mpmath.inf])`
+- For products: `mpmath.nprod(f, [1, mpmath.inf])`
+- Compare with tolerance: `abs(computed - expected) < mpf('1e-100')`
+
+### Symbolic Proof (sympy)
+- `from sympy import symbols, simplify, Sum, Product, oo, pi, zeta, bernoulli, factorial, Rational, S`
+- Symbolic proof is STRONGER than numerical — it proves exactly, not approximately
+- Use `simplify(expr1 - expr2) == 0` for identity verification
+- Use `Sum(f, (n, 1, oo)).doit()` for closed-form series evaluation
+- Use `limit(expr, x, value)` for limit verification
+
+### Choosing Evaluation Mode
+- **numerical**: when comparing computed vs expected values (series sums, integral values, constant identities). Use this when the claim says "X = Y", "X converges to Y", or "X can be expressed as Y" — compute BOTH sides and compare.
+- **boolean**: when verifying a true/false mathematical property (divisibility, primality, symbolic identity)
+- **convergence**: ONLY when the claim is purely "does X converge?" with NO target value. Output must be `result = {"series": [partial_sum_1, partial_sum_2, ...]}`. Do NOT use convergence mode when the claim specifies WHAT the series converges TO — use numerical mode instead.
+- **pattern**: when checking structural properties (symmetry, group structure, mapping properties)
+
+CRITICAL: "Series X converges to a value involving polylogarithms/pi/zeta" is a NUMERICAL claim, not a convergence claim. You must compute the series value AND the expected closed form, then compare them.
+
+CRITICAL — Compound claims require linking tests:
+- If the claim has the structure "A causes/enables/implies B", at least one test MUST span the link between A and B
+- Testing A alone and B alone does NOT verify "A causes B"
+- If no linking test can be constructed computationally, state this explicitly and cap confidence at 0.15
+- Example — WRONG: verify SR exists + verify 2:4 is regular → claim supported
+- Example — RIGHT: simulate gradient updates under 2:4 mask with varying noise → check if optimal noise is non-zero
+
+### Claim Type Classification
+You MUST classify the claim into one of these types:
+- **numerical_identity**: A=B where both are computable (e.g., series = known constant, integral = closed form)
+- **convergence_rate**: claims about HOW FAST something converges (rate, order, bounds)
+- **symbolic_identity**: algebraic/symbolic equivalence provable by manipulation
+- **curve_shape**: claims about function behavior (monotonicity, convexity, asymptotes)
+- **threshold_behaviour**: phase transitions, critical values, bifurcation points
+- **structural_mapping**: isomorphisms, analogies, structural correspondences between domains
+- **qualitative**: no computational test possible
+
+### Testability Gate (MANDATORY — evaluate BEFORE writing any code)
+
+Before generating verification code, classify the claim's testability:
+
+**LEVEL 1 — Computationally Provable:**
+The claim is a mathematical statement that can be verified by exhaustive enumeration, symbolic proof, or high-precision numerical computation from first principles.
+Examples: "Boolean rank of K₄ incidence matrix = 4", "This series converges to π²/6", "This recurrence produces these specific integers."
+→ Generate full verification code. Confidence can reach 0.95.
+
+**LEVEL 2 — Computationally Testable (consequences):**
+The claim makes a prediction whose CONSEQUENCES can be tested computationally, even if the claim itself is about a physical/empirical system.
+Examples: "This threshold formula predicts instability above x=3.7" → you can verify the formula's mathematical properties, check dimensional consistency, test edge cases.
+→ Generate code that tests consequences. Cap confidence at 0.70. State explicitly which aspect is being tested and which requires empirical validation.
+
+**LEVEL 3 — Empirically Verifiable Only:**
+The claim asserts that a physical system behaves in a specific way. No amount of computation can verify it without experimental data. The mathematics may be internally consistent, but internal consistency is not verification.
+Examples: "EUV resist shows KPZ dynamics with z ≈ 1.6", "Neural networks undergo martensitic phase transitions", "This material exhibits spinodal decomposition at T > 500K."
+→ DO NOT generate verification code that tests internal consistency of the claimed model.
+→ Instead return:
+```python
+result = {
+    "verified": False,
+    "confidence": 0.15,
+    "explanation": "Claim is empirical — asserts physical system behaviour that requires "
+                   "experimental data to verify. Mathematical structure of claimed model "
+                   "is internally consistent but this does not constitute verification. "
+                   "Computational verification not applicable.",
+    "testability": "empirical_only",
+    "experimental_predictions": [
+        # List specific experimental predictions derived from the claim
+    ]
+}
+```
+
+**LEVEL 4 — Untestable (qualitative analogy):**
+The claim draws a qualitative parallel between domains without making any specific quantitative prediction.
+→ Return confidence 0.10 with "qualitative analogy — no computational test applicable."
+
+**Classification question:** "If I had unlimited compute but ZERO experimental data, could I determine whether this claim is true or false?"
+- YES → Level 1 or 2
+- NO → Level 3 or 4
+
+**Anti-patterns that indicate circular verification (REJECT if Level 3):**
+1. Generating synthetic data FROM the claimed model, then fitting the claimed model to it
+2. Checking if a claimed constant is "close to" a known constant (proximity is not derivation)
+3. Checking if a formula produces "physically reasonable" outputs for chosen parameters
+4. Verifying that a power law is linear on a log-log plot (true by definition)
+5. Checking if a claimed exponent falls within a "valid range" of known exponents
+6. Testing dimensional consistency alone (necessary but never sufficient)
+7. Asserting an equivalence in a code comment and then only verifying one side (e.g., commenting "C_Wyner = I(Y1;Y2) for DSBS" then only computing I(Y1;Y2) and reporting C_Wyner as verified). If the claim contains an equality A = B and your code computes A but assumes A = B without testing it, you have verified A, not B. The explanation must state which quantity was actually computed and which equivalence was assumed.
+
+{{researchData}}
+{{errorFeedback}}
+{{guidance}}
+
+## Your Task
+Write Python code that GENUINELY TESTS the synthesized claim. The code MUST:
+
+1. Always begin with a `preflight_check()` call that validates symmetry-algebraic consistency and caps confidence on universal causal claims before any numerical computation runs. The function and `_CLAIM_TEXT` variable are auto-injected — just call it:
+   ```python
+   pf = preflight_check({"symmetry_order": N, "algebraic_constant": "<constant>"})
+   if pf.get("halt"): result = pf; # early exit on structural mismatch
+   ```
+   `claim_text` is auto-populated from the node content — do NOT set it manually. Only include `symmetry_order` and `algebraic_constant` keys when the claim involves symmetry groups and algebraic constants.
+2. Set a variable called `result` with the verification output
+3. Use ONLY the allowed modules listed above — NO others
+4. Complete in under 30 seconds
+5. Be syntactically valid Python with correct indentation
+6. Actually verify something — NOT just restate the claim as code. If the claim is Level 3 (empirical), do NOT generate code that tests mathematical consistency of the claimed model. A model being internally consistent is not evidence that the physical system behaves as claimed. Return the Level 3 template instead. The most dangerous EVM output is "verified 0.7" for an empirical claim — it awards a green badge to something that has not been tested.
+7. For compound claims of the form "A = B = C", decompose into sub-claims and report which were computationally verified and which were assumed. Example: "C_Wyner = I(Y1;Y2) = 1 - h(p1*p2)" decomposes into: (a) I(Y1;Y2) = 1 - h(p1*p2) — computationally verifiable, (b) C_Wyner = I(Y1;Y2) — requires a theorem (Gray-Wyner conjecture, proven Lei Yu 2023), not computationally tested. Confidence reflects the WEAKEST link in the chain. If any link is assumed rather than tested, this is Level 2 at best (testable consequences only), confidence ≤ 0.70. The explanation MUST list each sub-claim and whether it was verified or assumed.
+
+CRITICAL — Avoid tautological tests:
+- Do NOT just extract numbers from the claim and check them against themselves
+- Do NOT write `result = True` without computing anything
+- A genuine test derives a CONSEQUENCE of the claim and checks it independently
+- For mathematical claims: compute the expected relationship from first principles using mpmath/sympy
+- For convergence claims: run an iterative computation and check if it converges
+- For ratio/percentage claims: compute the actual value and compare to the claimed value
+- If you cannot write a non-trivial test, use confidence: 0.3 to indicate low-value verification
+
+CRITICAL — Distinguish definitions from predictions:
+- A DEFINITIONAL test verifies something true by construction (e.g., "structured masks have lower variance than random" — this is what "structured" MEANS)
+- A PREDICTIVE test verifies a consequence that could be false (e.g., "structured masks produce lower condition numbers under random weight sampling")
+- If ALL your sub-tests are definitional, cap confidence at 0.15 and flag: "All tests verify definitions, not predictions"
+- Ask yourself: "Is there any possible world where this test fails?" If no, it's definitional.
+
+CRITICAL — NEVER compare a computed constant against a hardcoded decimal string:
+- Do NOT paste a decimal reference value like `mpf('0.90689...')` and compare the computed result against it
+- This adds ZERO mathematical validity — it only introduces false negatives from digit transcription errors
+- Instead, verify by computing BOTH sides of the identity from their formulas and comparing them
+- Example — WRONG: `hex_density = pi / sqrt(12); assert abs(hex_density - mpf('0.9068996...')) < tol`
+- Example — RIGHT: `hex_density = pi / sqrt(12); alt_form = pi / (2 * sqrt(3)); assert abs(hex_density - alt_form) < tol`
+- The formula-to-formula comparison IS the verification. A pasted decimal is just a transcription liability.
+
+CRITICAL — Always derive explanation text from actual results, never hardcode success prose:
+- Do NOT write static explanation strings like `"Verified integer recurrence structure"` before knowing the outcome
+- The `explanation` field in the result MUST be computed AFTER the test runs, based on the actual boolean outcomes
+- Example — WRONG: `result = {"verified": all_ok, "explanation": "Verified recurrence structure"}`
+- Example — RIGHT: `result = {"verified": all_ok, "explanation": f"Recurrence {'holds' if all_ok else 'FAILED'} for n=2..{N}: {n_passed}/{N-1} passed"}`
+- All three fields (verified, confidence, explanation) must tell the same story — derive them from a single source of truth
+
+CRITICAL — Verify sequence starting values before hardcoding them:
+- When testing recurrences (Apéry, Fibonacci, etc.), verify initial conditions against known references (OEIS)
+- Off-by-one indexing in initial conditions silently breaks ALL subsequent recurrence checks
+- Example: Apéry ζ(3) sequence (A005259) starts a_0=1, a_1=5, a_2=73 — using `[5, 73]` as starting values is off-by-one
+- Always state which index convention you are using (0-indexed vs 1-indexed) and verify the first few terms match
+
+## Result Format
+Set `result` to one of these formats depending on what you're testing:
+
+- **Boolean** (claim is true/false): `result = True` or `result = {"verified": bool, "confidence": 0.0-1.0, "explanation": "..."}`
+- **Numerical** (computed value matches expected): `result = {"value": computed_val, "expected": expected_val, "tolerance": 1e-15}` — use tight tolerance for mpmath high-precision comparisons
+- **Convergence** (series converges — NO target value): `result = {"series": [partial_sum_1, partial_sum_2, ...]}` — provide at least 10 partial sums
+- **Pattern** (structural pattern holds): `result = {"matched": bool, "pattern": "description", "evidence": "..."}`
+
+### Confidence Caps by Testability Level
+- Level 1 (computationally provable): confidence up to 0.95
+- Level 2 (testable consequences): confidence up to 0.70
+- Level 3 (empirical only): confidence EXACTLY 0.15
+- Level 4 (qualitative): confidence EXACTLY 0.10
+
+These caps are non-negotiable. A Level 3 claim cannot receive confidence > 0.15 regardless of how many sub-tests pass.
+
+## Output Format
+Respond with a SINGLE JSON object — no markdown fences, no explanation text, no commentary before or after the JSON.
+The response must be valid JSON that can be parsed by `JSON.parse()`.
+
+{
+  "hypothesis": "One sentence describing what is being tested",
+  "testabilityLevel": "level_1|level_2|level_3|level_4",
+  "code": "the Python code as a SINGLE escaped string — use \n for newlines, \\ for backslashes, \" for quotes. Do NOT use raw Python syntax like list(), dict(), etc. outside the code string value.",
+  "evaluationMode": "boolean|numerical|convergence|pattern",
+  "expectedBehavior": "What should happen if the claim is correct",
+  "claimType": "numerical_identity|convergence_rate|symbolic_identity|curve_shape|threshold_behaviour|structural_mapping|qualitative"
+}
+
+CRITICAL: The "code" field is a JSON STRING containing Python source code. All newlines must be \n, all quotes must be escaped. The entire response must be parseable by a JSON parser — Python syntax like list(), dict(), True, False, None are NOT valid JSON values outside the code string.
+
+Your code must test the claim DIRECTLY: result=True means the claim IS supported, result=False means the claim is NOT supported.
+
+IMPORTANT: If the claim is purely qualitative with no testable computational aspect, use:
+`result = {"verified": True, "confidence": 0.3, "explanation": "Claim is qualitative — no computational test applicable"}`
+with evaluationMode "boolean" and claimType "qualitative".
