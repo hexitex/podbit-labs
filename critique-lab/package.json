@@ -1,6 +1,6 @@
 {
   "name": "critique-lab",
-  "version": "1.0.0",
+  "version": "0.6.1-alpha.1",
   "description": "LLM Critique Lab — evaluates knowledge graph nodes for quality, specificity, novelty, and falsifiability. No computation, no sandbox — pure LLM critique.",
   "type": "module",
   "main": "dist/index.js",
