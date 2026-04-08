@@ -1,16 +1,12 @@
-CRITICAL CONSTRAINT — READ FIRST:
-This lab has LIMITED GPU time. Every experiment MUST be as small and fast as possible.
-- DEFAULT to synthetic datasets (synthetic_quadratic, synthetic_regression) — they train in SECONDS
-- ONLY use MNIST/FashionMNIST if the claim genuinely requires real image data
-- NEVER use CIFAR-10 unless the claim explicitly requires colour images or multi-channel convolutions
-- Model size: 2-4 layers, width 32-128. Do NOT build large models unless the claim is about scale
-- Epochs: 10-20 maximum. Do NOT train to convergence unless convergence IS the signal
-- Batch size: 64-128. Do NOT use small batches that slow training
-- If in doubt, use synthetic_quadratic with a 3-layer MLP. This answers most claims about training dynamics in under 30 seconds.
+You have full access to PyTorch and can write arbitrary training code — custom models, custom loss functions, custom training loops, novel architectures, custom datasets, custom measurements. You are NOT limited to fixed menus.
+
+GPU budget guidance — pick the smallest experiment that can answer the question, then scale up only when the hypothesis genuinely demands it:
+- Synthetic datasets (`synthetic_quadratic`, `synthetic_regression`) train in seconds and isolate dynamics — a strong default for claims about optimisers, gradients, loss surfaces, and convergence.
+- MNIST / Fashion-MNIST / CIFAR-10 are all available when the hypothesis needs real images, more channels, or harder classification.
+- Model size, epoch count, and batch size are yours to choose. A 3-layer MLP on synthetic data answers many structural questions in under a minute; scale up when the hypothesis is about scale or when smaller models can't express the effect.
+- Stay within the configured execution timeout. When in doubt about whether something will fit, run a smaller version first and grow it.
 
 Write a complete Python training script to test the hypothesis below.
-
-You have full access to PyTorch and can write arbitrary training code — custom models, custom loss functions, custom training loops, novel architectures. You are NOT limited to fixed menus.
 
 ## Available Runner Utilities
 
@@ -49,19 +45,17 @@ from runner.training import build_optimizer, build_scheduler, build_loss_fn, tra
 
 You can also use these directly: `torch`, `torch.nn`, `numpy`, `time`, `json`, `os`, `math`.
 
-## Dataset & Model Size Strategy
+## Dataset & Model Size — pick what fits the hypothesis
 
-**Use the smallest experiment that can answer the question.** This lab runs real training — large datasets and models waste GPU time without adding signal.
+**Use the smallest experiment that can answer the question, and grow it when the question demands it.** Real training takes real GPU time — match the scale of the experiment to the scale of the claim.
 
-**Decision order:**
-1. **Synthetic datasets first** (`synthetic_quadratic`, `synthetic_regression`) — use these when the claim is about optimizer dynamics, gradient behaviour, loss landscape geometry, convergence properties, or any training signal that doesn't depend on real data. These are tiny, fast, and isolate the variable you're testing.
-2. **MNIST / Fashion-MNIST** — use when you need a real classification task but the claim isn't about dataset complexity. 28x28 grayscale, trains in seconds.
-3. **CIFAR-10** — use ONLY when the claim specifically requires colour images, higher input dimensionality, or multi-channel convolutions. CIFAR-10 is slow — avoid it unless the hypothesis demands it.
-4. **Custom tiny datasets** — for claims about data properties (noise, class imbalance, distribution shift), generate a small synthetic dataset directly with PyTorch rather than loading a large one.
+Available datasets and when each is a natural fit:
+- **Synthetic** (`synthetic_quadratic`, `synthetic_regression`) — fastest, fully controllable. Strong default for claims about optimiser dynamics, gradient behaviour, loss-landscape geometry, and convergence properties.
+- **MNIST / Fashion-MNIST** — small real classification tasks (28×28 grayscale). Use when you need real data but not colour or high resolution.
+- **CIFAR-10** — colour images, multi-channel convolutions. Use when the hypothesis depends on real visual content, channel structure, or harder classification.
+- **Custom datasets** — when none of the above fit, build a small dataset directly with PyTorch (noise injection, class imbalance, distribution shift, custom regression targets, etc.).
 
-**Model size:** Use 2-4 layer networks with width 32-128 unless the claim is specifically about scale. A small MLP on synthetic data answers most structural claims. Don't build a ResNet when an MLP suffices.
-
-**Epochs:** Use the minimum needed to observe the signal (often 10-20). Don't train to convergence unless convergence behaviour IS the signal.
+Model size and training length are yours to choose. A small MLP on synthetic data answers many structural claims; reach for ResNet/Transformer-Tiny when the hypothesis is about depth, residual structure, or attention. Train for as many epochs as the signal needs and the timeout allows.
 
 ## Using Runner Utilities vs Custom Code
 
@@ -104,15 +98,19 @@ If the experiment fails due to hardware limitations, set:
 result = {"_error": "not testable on current hardware: <reason>"}
 ```
 
-## Rules
+## Conventions
 
-1. You MUST set a global `result` variable. The executor checks for this.
-2. Use `torch.manual_seed(seed)` for reproducibility on each run.
-3. Network access is blocked. Do not attempt HTTP requests.
+1. Set a global `result` variable — the executor reads it. (See the structure above.)
+2. Seed each run with `torch.manual_seed(seed)` for reproducibility.
+3. Use `detect_device()` for GPU/CPU selection.
 4. Save any chart PNGs to `artifact_dir`.
 5. All numeric values must be JSON-serializable — convert tensors with `.item()`, numpy arrays with `.tolist()`.
 6. Wrap the experiment in try/except and set `result = {"_error": str(e)}` on failure.
-7. **Minimise experiment size.** Default to synthetic datasets + small models. Only use MNIST if you need real data. Only use CIFAR-10 if the claim requires colour/multi-channel input. See "Dataset & Model Size Strategy" above.
-8. Use `detect_device()` for GPU/CPU selection.
+
+## Sandbox (real, runtime-enforced)
+
+- Network access is blocked — no HTTP requests, no remote downloads. Datasets must come from `runner.datasets` or be generated in-process.
+- File I/O is restricted to `artifact_dir`.
+- No subprocess.
 
 Respond with JSON: {"code": "your complete training script here"}

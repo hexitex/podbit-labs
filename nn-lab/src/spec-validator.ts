@@ -1,8 +1,13 @@
 /**
- * NN-Lab Spec Validator — validates experiment specs against fixed menus.
+ * NN-Lab Spec Validator — validates experiment specs against the fixed menus
+ * that form the spec-extractor API contract.
  *
- * Everything is a fixed menu. If it's not on the menu, it's not supported.
- * This is the enforcement layer that prevents arbitrary experiments.
+ * Fixed menus exist for the deterministic script-builder path only — they
+ * give the spec extractor a stable surface to target. They are NOT a
+ * limitation on what nn-lab can run: any spec that fails menu validation
+ * is rerouted to `nn_codegen` (see index.ts), which lets the LLM write
+ * arbitrary PyTorch — custom models, custom losses, custom training loops,
+ * custom datasets, custom measurements.
  */
 
 import type { ExperimentSpec, BaseLabConfig } from '@lab/core';

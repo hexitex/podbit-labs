@@ -188,30 +188,31 @@ const PHYSICS_GUIDANCE: Record<string, string[]> = {
     curve_shape: [],
 };
 
-// Performance hints — only include lines relevant to the spec type
+// Performance hints — only include lines relevant to the spec type.
+// These are guidance to fit the execution timeout, not hard rules.
+// You can exceed any of these when the problem genuinely needs it — just budget for the timeout.
 function getPerformanceHints(specType: string): string {
     const always = [
-        '- **Parameter sweeps**: Limit to ≤ 20 sweep points. Each point may involve a full ODE integration. 5-10 points per parameter is usually enough to detect thresholds.',
-        '- **Matrix operations**: Operations on N×N dense matrices cost O(N³). At N=500, one matmul takes ~0.1s. At N=3000, it takes ~30s. Keep N ≤ 500 for any matrix that gets multiplied repeatedly.',
-        '- **Vectorize, don\'t loop**: Use numpy broadcasting and vectorized operations instead of Python for-loops over arrays. If you need nested loops over large arrays, use `@njit` from numba.',
-        '- **Memory**: A complex128 matrix of size N×N uses 16N² bytes. Keep dense matrices under N=3000. Use scipy.sparse for larger systems.',
-        '- **Eigendecomposition in loops**: `np.linalg.eigh(H)` is O(N³). Plan your loop counts × matrix sizes to stay under 60s total.',
-        '- **Sympy**: NEVER use sympy for numerical computation — it is 100-1000x slower than numpy. Use numpy/scipy for all numerical work.',
-        '- **scipy.optimize**: Always pass `options={\'maxiter\': 500}` or equivalent. Never optimize without bounds on unbounded landscapes.',
+        '- **Parameter sweeps**: 5–10 points per parameter is usually enough to detect thresholds; 20+ is fine when you need resolution.',
+        '- **Matrix operations**: O(N³) for dense N×N. Around N=500 a matmul is ~0.1s, N=3000 is ~30s. Pick N to fit your budget.',
+        '- **Vectorize when convenient**: numpy broadcasting and `@njit` from numba are usually faster than Python loops over large arrays — but plain loops are fine when clarity matters more.',
+        '- **Memory**: complex128 uses 16N² bytes per dense matrix. Use `scipy.sparse` when dense doesn\'t fit.',
+        '- **Sympy vs numpy**: sympy is symbolic and much slower than numpy for numerical work. Use sympy for symbolic manipulation, numpy/scipy for numerics.',
+        '- **scipy.optimize**: pass an explicit `maxiter`/`options` and bounds when you can — unbounded optimisers occasionally wander.',
     ];
 
     const quantum = [
-        '- **Hilbert space**: Total tensor product dimension MUST stay ≤ 500. For N subsystems of dimension d, total = d^N. Use n_cut = 5-8 for multi-mode quantum systems.',
+        '- **Hilbert space**: tensor-product dim grows as d^N. For multi-mode systems an n_cut around 5–10 keeps total dim manageable; raise it when truncation error matters.',
     ];
     const ode = [
-        '- **ODE integration**: For density matrix evolution (Lindblad), the state vector has dim² elements. Keep integration time short (T ≤ 20/κ) and use max_step ≥ 1.0. If dim > 200, use sparse matrices.',
-        '- **No bare solve_ivp**: Use the helper `solve_ode(rhs, y0, t_span, n_points)` or `solve_master_equation(H, rho0, t_span, L_ops, gamma)` — they are already imported.',
+        '- **ODE/Lindblad**: density-matrix state has dim² elements. Pick integration time and max_step to fit the timeout; switch to sparse when dim is large.',
+        '- **Helpers available**: `solve_ode(rhs, y0, t_span, n_points)` and `solve_master_equation(H, rho0, t_span, L_ops, gamma)` are pre-imported — use them when convenient, or call scipy directly.',
     ];
     const selfConsistent = [
-        '- **Self-consistent loops**: BCS gap equations, mean-field, Hartree-Fock — ALWAYS set max_iter ≤ 200 and check convergence. Use `for i in range(max_iter):` not `while not converged:`.',
+        '- **Self-consistent loops**: BCS / mean-field / Hartree-Fock — always cap iterations and check convergence so the job ends. Around 100–500 iterations is typical.',
     ];
     const kGrid = [
-        '- **k-point grids**: For Brillouin zone sampling, use ≤ 50×50 grid (2500 points). Each k-point requires an eigendecomposition.',
+        '- **k-point grids**: Brillouin-zone sampling around 30×30 to 50×50 is usually enough; go higher for fine spectral features, lower for quick scans.',
     ];
 
     const extra: string[] = [];
@@ -225,8 +226,8 @@ function getPerformanceHints(specType: string): string {
 function getPhysicsGuidance(specType: string): string {
     const lines = PHYSICS_GUIDANCE[specType] || Object.values(PHYSICS_GUIDANCE).flat();
     const common = [
-        '- Do NOT say "requires QuTiP/Qiskit/FDTD/DMFT" — these problems reduce to linear algebra and ODEs that numpy/scipy handle.',
-        '- A model is NOT tautological if coupling/ordering/threshold parameters can be varied to DISPROVE the claim.',
+        '- Most "requires QuTiP/Qiskit/FDTD/DMFT" claims reduce to linear algebra and ODEs that numpy/scipy handle directly — reach for the underlying math instead of declining the problem.',
+        '- A model is informative when coupling/ordering/threshold parameters can be varied in a way that could disprove the claim.',
     ];
     return [...lines, ...common].join('\n');
 }
@@ -315,18 +316,20 @@ YOUR TASK:
 3. Store results in the result dict using measure("label", lambda: computation)
 4. Include a "supported" key: measure("supported", lambda: True/False) based on your measurements
 
-RULES:
-- Write top-level code only — no function wrappers, no if __name__ blocks, no imports
-- Use the measure() helper for safe error handling
-- Values must be numbers, lists, or booleans
-- No file I/O, no network, no os/sys/subprocess
-- ONLY use functions listed in the HELPER FUNCTIONS sections above or from the LIBRARIES listed above
-- Do NOT call functions that don't exist — there is no simulate_*, compute_*, run_*, or test_* function unless you define it inline
-- If you need a computation, write it directly using numpy/scipy operations — do not reference phantom helper functions
-- You MAY define small local helper functions (def my_fn(...): ...) at the top of your code if needed for clarity
-${precision > 50 ? `- Use mpmath with mp.dps = ${precision} for high-precision arithmetic` : ''}
+CONVENTIONS:
+- Write top-level code — no function wrappers, no \`if __name__\` blocks, no imports (everything is already in scope)
+- Prefer the \`measure()\` helper for safe error handling, but raw assignments to \`result[...]\` are also fine
+- Values stored in \`result\` must be JSON-serialisable (numbers, lists, dicts, booleans, strings)
+- Reach first for the listed libraries and helpers — they're already imported. If you genuinely need something else, define it inline
+- Define your own helper functions freely if it makes the code clearer
+${precision > 50 ? `- mpmath is available with mp.dps = ${precision}; use it where precision actually matters` : ''}
 
-PERFORMANCE — HARD LIMITS (violations will timeout and waste compute):
+SANDBOX (enforced by the runtime — these are real, not stylistic):
+- No network access (the executor blocks all sockets)
+- No file I/O outside the artifact directory
+- No subprocess; no \`exec\`/\`eval\` on untrusted strings
+
+PERFORMANCE GUIDANCE — these are budgeting hints, not hard caps. Exceed them when the problem needs it; just stay inside the execution timeout:
 ${perfHints}
 
 PHYSICS CLAIMS — reduce to math:

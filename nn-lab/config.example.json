@@ -35,12 +35,12 @@
 
   "capabilities": {
     "specTypes": {
-      "nn_training_profile": "Train a single neural network configuration and collect measurements (loss curve, accuracy, gradient stats, weight norms, sparsity distribution). DATASET RULE: Default to synthetic_quadratic or synthetic_regression. Use MNIST only if real classification data is needed. CIFAR-10 is ONLY for claims that explicitly require colour/multi-channel images.",
-      "nn_paired_comparison": "Train 2+ configurations with matched seeds and compute cross-condition measurements (convergence speed ratio, accuracy difference, sparsity divergence, gradient divergence). Use when comparing configurations. DATASET RULE: Prefer synthetic datasets — most comparison claims (optimizer behaviour, architecture differences, hyperparameter sensitivity) are testable on synthetic_quadratic/synthetic_regression without real data.",
-      "nn_sparsity_profile": "Train with a sparsity method and measure per-layer sparsity distribution, accuracy impact, and gradient stats. DATASET RULE: Use MNIST or Fashion-MNIST — sparsity effects are observable on small datasets. Avoid CIFAR-10 unless the claim specifically requires multi-channel convolutions.",
-      "nn_optimizer_dynamics": "Train on a synthetic loss surface and collect optimizer-specific measurements: effective LR trajectories, gradient stats, Hessian top eigenvalue. Use for optimizer behaviour, LR adaptation, loss landscape geometry — NOT task performance. ALWAYS use synthetic_quadratic or synthetic_regression.",
-      "nn_architecture_scaling": "Train configurations varying in depth/width, measuring how accuracy, convergence, gradient stats, weight norms change with scale. DATASET RULE: Use MNIST or synthetic datasets. Scaling behaviour is observable without large datasets.",
-      "nn_codegen": "Generate custom PyTorch training code via LLM for experiments beyond fixed menus — custom architectures, activations, loss functions, optimizers, training procedures, novel measurements. DATASET RULE: Always use the smallest dataset that answers the question. Default to synthetic_quadratic/synthetic_regression. MNIST only when real data is needed. CIFAR-10 is a last resort for claims that explicitly demand colour images."
+      "nn_training_profile": "Train a single neural network configuration and collect measurements: loss curve, accuracy, gradient stats, weight norms, sparsity distribution. Pick the dataset and model size that match the hypothesis.",
+      "nn_paired_comparison": "Train 2+ configurations with matched seeds and compute cross-condition measurements: convergence speed ratio, accuracy difference, sparsity divergence, gradient divergence. For comparing configurations head-to-head.",
+      "nn_sparsity_profile": "Train with a sparsity method and measure per-layer sparsity distribution, accuracy impact, and gradient stats.",
+      "nn_optimizer_dynamics": "Probe optimizer behaviour: effective LR trajectories, gradient stats, Hessian top eigenvalue, loss-landscape geometry. Synthetic loss surfaces (synthetic_quadratic, synthetic_regression) isolate optimizer dynamics cleanly, but any dataset is available.",
+      "nn_architecture_scaling": "Vary depth/width across configurations and measure how accuracy, convergence, gradient stats, and weight norms change with scale.",
+      "nn_codegen": "Generate custom PyTorch training code via LLM for experiments beyond the fixed menus — custom architectures, activations, loss functions, optimizers, training procedures, novel measurements, custom datasets. Full PyTorch + numpy + matplotlib are available; pick the experiment scale that fits the hypothesis and the execution timeout."
     },
     "queueLimit": 100,
     "artifactTtlSeconds": 604800,

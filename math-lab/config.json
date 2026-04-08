@@ -26,16 +26,15 @@
   },
 
   "capabilities": {
-    "labIdentity": "prompts/lab-identity.md",
     "specTypes": {
-      "math": "Pure numerical computation using standard math libraries (numpy, scipy, sympy, mpmath). Verify mathematical identities, evaluate expressions, compare computed constants. NOT for: simulations requiring domain-specific packages, ML training, quantum computing, or anything needing libraries beyond standard scientific Python.",
-      "parameter_sweep": "Sweep a mathematical parameter across a range using standard math libraries. The function being swept must be expressible as pure Python math — no ML frameworks, no physics engines, no domain simulators. Good for: testing how a formula behaves across a range. NOT for: training models at different hyperparameters.",
-      "convergence_analysis": "Test whether a mathematically-defined series, sequence, or iterative formula converges. Must be expressible as a closed-form or simple recursive computation. NOT for: empirical convergence of training algorithms or simulations.",
-      "curve_shape": "Analyze the shape of a mathematically-defined function (monotonicity, extrema, inflection points, bounds). The function must be computable from a formula. NOT for: empirical curves from data or simulations.",
-      "quantum_model": "Quantum mechanical computations using density matrices, Hamiltonians, and measurement operators on finite-dimensional Hilbert spaces. Tests claims about entanglement, Bell inequalities, quantum state evolution, coupling regimes, non-classical states, decoherence, photon statistics. Implemented as linear algebra (numpy/scipy) on Hilbert spaces — no quantum computing packages needed.",
-      "wave_system": "Wave propagation, band structures, topological invariants, scattering and transmission analysis. Tests claims about photonic/phononic crystals, edge states, topological protection, waveguide modes, disorder robustness. Implemented via transfer matrices, tight-binding Hamiltonians, eigenvalue problems (numpy/scipy) — no FDTD or FEM solvers needed.",
-      "coupled_dynamics": "Coupled dynamical systems: optomechanical cavities, nonlinear oscillators, feedback loops, threshold and bifurcation behavior. Tests claims about strong coupling, critical thresholds, stability, parametric amplification, Langevin dynamics. Implemented via ODE/SDE integration, stability analysis, Floquet theory (scipy.integrate, scipy.linalg) — no domain-specific physics engines needed.",
-      "many_body_model": "Many-body condensed matter and quantum materials: BCS superconductivity, exciton-polaron formation, superfluid weight, quasiparticle spectral functions, Green's functions, self-energy, mean-field phase diagrams. Tests claims about Cooper pairing, gap equations, topological superconductors, proximity effects, van der Waals heterostructures. Implemented via BdG Hamiltonians, Matsubara Green's functions, self-consistent mean-field loops, and spectral function computation (numpy/scipy + numba JIT) — no QuTiP, DMFT packages, or domain-specific condensed matter codes needed."
+      "math": "Numerical computation: verify mathematical identities, evaluate expressions, compare computed constants, work to arbitrary precision.",
+      "parameter_sweep": "Sweep a parameter across a range and observe how a quantity responds — find thresholds, extrema, monotonicity, or trend.",
+      "convergence_analysis": "Test whether a series, sequence, or iterative process converges, and at what rate.",
+      "curve_shape": "Analyze the shape of a function: monotonicity, extrema, inflection points, asymptotes, bounds.",
+      "quantum_model": "Quantum mechanical computations on finite-dimensional Hilbert spaces — density matrices, Hamiltonians, entanglement, Bell inequalities, state evolution, decoherence, photon statistics.",
+      "wave_system": "Wave propagation, band structures, topological invariants, scattering and transmission — photonic/phononic crystals, edge states, waveguide modes, disorder robustness.",
+      "coupled_dynamics": "Coupled dynamical systems: optomechanics, nonlinear oscillators, feedback loops, thresholds, bifurcations, stability, parametric amplification, Langevin dynamics.",
+      "many_body_model": "Many-body and condensed matter: BCS superconductivity, exciton–polaron formation, superfluid weight, spectral functions, Green's functions, self-energy, mean-field phase diagrams, Cooper pairing, gap equations, topological superconductors, proximity effects."
     },
     "queueLimit": 20,
     "artifactTtlSeconds": 604800,

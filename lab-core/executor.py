@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
-Math-Lab Sandbox Executor
+Lab Sandbox Executor — used by every lab in podbit-labs.
 
-Executes lab-generated Python code in a separate process.
-The code is a crafted template with LLM-generated computation inserted.
+Executes lab-generated Python code in a separate process. The code may be a
+math-lab template with LLM-generated computation inserted, an nn-lab training
+script, or any other Python the lab pipeline produces.
 
 Security model:
-  - Network kill switch (patches socket at C level)
-  - Process timeout (enforced by parent)
-  - Template controls what's available
+  - Optional network kill switch (patches socket at the C level) — controlled by
+    the second CLI arg, configured per-lab via sandbox.networkKillSwitch.
+  - Process timeout enforced by the parent (sandbox.executionTimeoutMs).
+  - Output cap enforced by the parent (sandbox.maxOutputBytes).
 
-Code must set a variable called `result`. Output is JSON to stdout:
+Code must set a variable called `result` (or define a `main()` that returns one).
+Output is a single JSON object on stdout:
   {"result": ..., "error": null, "execution_time_ms": ...}
 """
 

@@ -63,7 +63,7 @@ export async function evaluate(
 
 async function llmEvaluate(spec: ExperimentSpec, output: Record<string, any>, measurementErrors: string[], signal?: AbortSignal): Promise<LabVerdict> {
     const errorWarning = measurementErrors.length > 0
-        ? `\n\nWARNING — FAILED MEASUREMENTS:\nThe following ${measurementErrors.length} measurement(s) threw runtime errors and contain NO valid data:\n${measurementErrors.map(e => `  - ${e}`).join('\n')}\nDo NOT treat error objects as evidence for or against the hypothesis. If any failed measurement is critical to the verdict, you MUST return "inconclusive".\n`
+        ? `\n\nNote — ${measurementErrors.length} measurement(s) errored and contain no valid data:\n${measurementErrors.map(e => `  - ${e}`).join('\n')}\nThese error objects are not evidence either way. If a critical measurement is missing, prefer "inconclusive" over a verdict drawn from the surviving measurements alone — but use your judgment about which measurements were actually load-bearing for the hypothesis.\n`
         : '';
 
     const prompt = `You are evaluating the results of a computational experiment.

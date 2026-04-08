@@ -59,13 +59,13 @@ HYPOTHESIS: ${spec.hypothesis}
 SETUP:
 ${setupDesc}
 
-HARD CONSTRAINTS (violating these wastes GPU hours):
-  max_epochs: ${maxEpochs}
-  max_runs: ${maxRuns}
+BUDGET (guidance — exceed when the hypothesis genuinely needs it, but stay inside the execution timeout):
+  max_epochs: ${maxEpochs}     # default cap; raise it in the spec if convergence requires more
+  max_runs: ${maxRuns}          # number of seeds per condition; more = better statistics, more GPU
   artifact_dir: ${artifactDir.replace(/\\/g, '/')}
-  DATASET: Use synthetic_quadratic or synthetic_regression unless the hypothesis REQUIRES real images. MNIST only if needed. CIFAR-10 almost never.
-  MODEL: 2-4 layers, width 32-128. The signal is structural — scale adds noise, not clarity.
-  TARGET: Experiment should complete in under 2 minutes. If your design would take longer, simplify.
+  Dataset: synthetic datasets are fastest and isolate dynamics; MNIST/Fashion-MNIST/CIFAR-10 are all available — pick whichever the hypothesis actually needs.
+  Model: pick the smallest architecture that can express the hypothesis. Scale up when scale itself is the variable.
+  Target wall time: aim for ~2 minutes per run when possible — longer is fine when justified.
 ${errorFeedback}`;
 }
 
@@ -298,7 +298,7 @@ export async function generateTrainingCode(
             // It wastes GPU hours and produces confusing "incomplete" results.
             throw new LabError(
                 `Codegen failed all ${maxCodegenAttempts + 1} preflight attempts. Last error: ${preflightError}`,
-                'preflight', true,
+                'sandbox', true,
             );
         }
 
