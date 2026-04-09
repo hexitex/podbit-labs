@@ -92,7 +92,8 @@
       <th>Status</th>
       <th>Verdict</th>
       <th>Error</th>
-      <th>Time</th>
+      <th>Started</th>
+      <th>Duration</th>
       <th>Actions</th>
     </tr>
   </thead>
@@ -216,7 +217,7 @@ function renderJobs() {
   else if (currentFilter !== 'all') filtered = allJobs.filter(j => j.status === currentFilter);
 
   if (filtered.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">No jobs</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">No jobs</td></tr>';
     return;
   }
 
@@ -224,14 +225,17 @@ function renderJobs() {
     const spec = j.spec ? (typeof j.spec === 'string' ? JSON.parse(j.spec) : j.spec) : null;
     const specType = spec?.specType || '\u2014';
     const hypothesis = spec?.hypothesis || '\u2014';
-    const created = j.created_at || j.createdAt || '';
-    const shortTime = created ? new Date(created + 'Z').toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '\u2014';
+    const started = j.started_at || j.startedAt || '';
+    const completed = j.completed_at || j.completedAt || '';
+    const startedStr = started ? formatDateTime(started) : (j.status === 'queued' ? 'queued' : '\u2014');
     const canCancel = j.status === 'queued' || j.status === 'running';
     const hasError = j.error && j.status === 'failed';
     const isExpanded = expandedTraces.has(j.id);
+    const confidence = j.confidence != null ? j.confidence : null;
     const verdict = j.verdict || '\u2014';
     const verdictClass = j.verdict ? j.verdict : '';
-    const duration = j.executionTimeMs ? formatDuration(j.executionTimeMs) : '\u2014';
+    const verdictDisplay = j.verdict ? (confidence != null ? `${j.verdict} <span style="opacity:0.6;font-weight:400">${(confidence * 100).toFixed(0)}%</span>` : j.verdict) : '\u2014';
+    const duration = j.executionTimeMs ? formatDuration(j.executionTimeMs) : (started && !completed && j.status === 'running' ? formatDuration(Date.now() - new Date(started + 'Z').getTime()) + '\u2026' : '\u2014');
     const errorPreview = hasError ? j.error.split('\n').pop() || j.error : '';
 
     // Live stage info for running jobs
@@ -249,8 +253,9 @@ function renderJobs() {
       <td class="spec-type">${esc(specType)}</td>
       <td class="hypothesis" title="${esc(hypothesis)}">${esc(hypothesis.slice(0, 60))}</td>
       <td><span class="status ${j.status}">${j.status}</span>${stageHtml}</td>
-      <td class="verdict-col ${verdictClass}">${verdict}</td>
+      <td class="verdict-col ${verdictClass}">${verdictDisplay}</td>
       <td>${hasError ? `<span class="error-summary" onclick="toggleTrace('${j.id}')" title="${esc(j.error)}">${esc(errorPreview.slice(0, 60))}</span>` : '\u2014'}</td>
+      <td class="time" title="${started ? new Date(started + 'Z').toLocaleString() : ''}">${startedStr}</td>
       <td class="duration">${duration}</td>
       <td class="actions">
         ${canCancel ? `<button class="btn danger" onclick="cancelJob('${j.id}')">&#10005;</button>` : ''}
@@ -262,7 +267,7 @@ function renderJobs() {
     if (hasError) {
       const cached = traceCache[j.id];
       const traceHtml = cached ? formatTrace(cached) : (isExpanded ? '<span style="color:#666">Loading...</span>' : '');
-      rows += `<tr class="trace-row"><td colspan="8"><div class="trace-panel ${isExpanded ? 'expanded' : 'collapsed'}"><div class="trace-content" id="trace-${j.id}">${traceHtml}</div></div></td></tr>`;
+      rows += `<tr class="trace-row"><td colspan="9"><div class="trace-panel ${isExpanded ? 'expanded' : 'collapsed'}"><div class="trace-content" id="trace-${j.id}">${traceHtml}</div></div></td></tr>`;
     }
 
     return rows;
@@ -274,9 +279,25 @@ function renderJobs() {
 }
 
 function formatDuration(ms) {
+  if (ms < 0) return '\u2014';
   if (ms < 1000) return ms + 'ms';
   if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
-  return Math.round(ms / 60000) + 'm ' + Math.round((ms % 60000) / 1000) + 's';
+  const m = Math.floor(ms / 60000);
+  const s = Math.round((ms % 60000) / 1000);
+  if (m < 60) return m + 'm ' + s + 's';
+  const h = Math.floor(m / 60);
+  return h + 'h ' + (m % 60) + 'm';
+}
+
+function formatDateTime(isoStr) {
+  if (!isoStr) return '\u2014';
+  const d = new Date(isoStr.endsWith('Z') ? isoStr : isoStr + 'Z');
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  if (isToday) return time;
+  const date = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return date + ' ' + time;
 }
 
 function formatTrace(trace) {
