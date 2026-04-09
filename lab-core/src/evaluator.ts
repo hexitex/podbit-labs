@@ -66,7 +66,7 @@ async function llmEvaluate(spec: ExperimentSpec, output: Record<string, any>, me
         ? `\n\nNote — ${measurementErrors.length} measurement(s) errored and contain no valid data:\n${measurementErrors.map(e => `  - ${e}`).join('\n')}\nThese error objects are not evidence either way. If a critical measurement is missing, prefer "inconclusive" over a verdict drawn from the surviving measurements alone — but use your judgment about which measurements were actually load-bearing for the hypothesis.\n`
         : '';
 
-    const prompt = `You are evaluating the results of a computational experiment.
+    const prompt = `You are a scientific referee evaluating the results of a computational experiment against a hypothesis. Your job is to determine what was actually tested, what was assumed, and what remains open.
 
 EXPERIMENT TYPE: ${spec.specType}
 
@@ -79,19 +79,29 @@ ${JSON.stringify(spec.setup, null, 2)}
 COMPUTED RESULTS:
 ${JSON.stringify(output, null, 2)}
 ${errorWarning}
-Based on the computed results, determine whether the hypothesis is supported or refuted.
+## Your evaluation must cover:
+
+1. **What was actually tested** — describe in concrete terms what the code computed and compared. Name the quantities.
+2. **What was assumed or encoded** — if the code defined a formula that mirrors the hypothesis and then verified arithmetic consistency, say so. A test that encodes the claimed answer in its setup is tautological — it tells you the code is correct, not that the physics is right.
+3. **Which sub-claims of the hypothesis are addressed** — break the hypothesis into its constituent claims and state which ones the experiment bears on and which it doesn't touch.
+4. **What would a stronger test look like** — if the experiment is weak or tautological, describe what a non-circular test of the same hypothesis would measure.
+5. **Verdict** — supported, refuted, or inconclusive. "Supported" requires that the experiment could have produced a different outcome under plausible alternative physics. If every test passes by construction, the verdict is "inconclusive" regardless of how many measurements succeeded.
 
 Respond with JSON:
 {
     "verdict": "supported" | "refuted" | "inconclusive",
     "confidence": 0.0-1.0,
-    "details": "explanation of your reasoning"
+    "details": "Your full evaluation covering all 5 points above. Be specific — quote measurement names and values. This is the primary record of what the experiment means.",
+    "testedClaims": ["list of sub-claims the experiment actually bears on"],
+    "untestedClaims": ["list of sub-claims the experiment does not address"],
+    "tautologyRisk": "none | low | high — whether the code encodes the expected answer in its setup",
+    "suggestedFollowUp": "what a better experiment would test, or null if the current one is sufficient"
 }`;
 
     try {
         const rawResponse = await callLlm(prompt, { role: 'evaluation', jsonSchema: { name: 'eval', schema: {} }, signal });
 
-        let result: { verdict: string; confidence: number; details: string };
+        let result: any;
         try { result = JSON.parse(rawResponse); } catch {
             const block = rawResponse.match(/```json\s*([\s\S]*?)```/);
             if (block) { result = JSON.parse(block[1]); }
@@ -102,13 +112,36 @@ Respond with JSON:
             }
         }
 
-        const verdict = (['supported', 'refuted', 'inconclusive'].includes(result.verdict)
+        // If the evaluator flagged high tautology risk, downgrade to inconclusive
+        // regardless of what verdict it gave — a tautological test proves nothing.
+        let verdict = (['supported', 'refuted', 'inconclusive'].includes(result.verdict)
             ? result.verdict : 'inconclusive') as LabVerdict['verdict'];
+        const tautologyRisk = result.tautologyRisk?.toLowerCase?.() || 'none';
+        if (tautologyRisk === 'high' && verdict === 'supported') {
+            verdict = 'inconclusive';
+            result.details = `[Downgraded from "supported" — evaluator flagged high tautology risk] ${result.details || ''}`;
+        }
+
+        // Build structured details from the rich evaluation fields
+        const structuredDetails: Record<string, unknown> = {};
+        if (Array.isArray(result.testedClaims) && result.testedClaims.length > 0) {
+            structuredDetails.testedClaims = result.testedClaims;
+        }
+        if (Array.isArray(result.untestedClaims) && result.untestedClaims.length > 0) {
+            structuredDetails.untestedClaims = result.untestedClaims;
+        }
+        if (tautologyRisk !== 'none') {
+            structuredDetails.tautologyRisk = tautologyRisk;
+        }
+        if (result.suggestedFollowUp) {
+            structuredDetails.suggestedFollowUp = result.suggestedFollowUp;
+        }
 
         return {
             verdict,
             confidence: Math.max(0, Math.min(1, result.confidence ?? 0.5)),
             details: result.details || `LLM evaluation: ${verdict}`,
+            structuredDetails: Object.keys(structuredDetails).length > 0 ? structuredDetails : undefined,
             evalPrompt: prompt,
             evalRawResponse: rawResponse,
         };

@@ -335,7 +335,110 @@ ${perfHints}
 PHYSICS CLAIMS — reduce to math:
 ${physicsGuide}
 
+TAUTOLOGY PROHIBITION — DO NOT evaluate textbook formulas as a substitute for solving equations:
+If the hypothesis describes a physical effect (frequency splitting, band gaps, transmission, mode coupling, topological invariants), you MUST derive the result by solving the underlying equations — NOT by plugging parameters into the known analytical answer. Specifically:
+- For cavity/waveguide modes: build a transfer matrix or eigenvalue problem and solve it. Do NOT just compute f = mc/(2nL) or similar closed-form expressions.
+- For frequency splitting in modified media: construct the wave equation with the relevant constitutive relations and find eigenfrequencies numerically. Do NOT substitute effective indices into a formula.
+- For band structures: build and diagonalize a Hamiltonian. Do NOT evaluate dispersion relations analytically.
+- For topological quantities: compute Berry phases or Chern numbers from eigenstates. Do NOT assert topological properties from known results.
+- For scattering/transmission: build a transfer matrix or solve the scattering problem. Do NOT evaluate known T(E) formulas.
+If your code could be replaced by 10 lines of direct formula evaluation and still produce the same results, you are restating the hypothesis as arithmetic, not testing it. The result must EMERGE from numerical computation (matrix diagonalization, ODE integration, iterative solving), not from substitution into a known formula.
+
 Respond with JSON: {"code": "your computation code here"}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POST-GENERATION TAUTOLOGY DETECTION
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Patterns that indicate real numerical computation (equation solving,
+ * matrix operations, eigenvalue problems, iterative methods) vs
+ * direct formula evaluation. Checked per spec type.
+ */
+const COMPUTATION_MARKERS: Record<string, RegExp[]> = {
+    wave_system: [
+        /np\.linalg\.eig/,           // eigenvalue decomposition
+        /scipy\.linalg\.eig/,        // eigenvalue decomposition
+        /transfer_matrix\s*\(/,      // transfer matrix helper
+        /tight_binding_1d\s*\(/,     // tight binding helper
+        /band_structure_1d\s*\(/,    // band structure helper
+        /np\.linalg\.solve/,         // linear system solve
+        /np\.linalg\.inv/,           // matrix inversion
+        /scipy\.linalg\.solve/,      // linear system solve
+        /scipy\.sparse\.linalg/,     // sparse solvers
+        /chern_number_2d\s*\(/,      // topological invariant
+        /scipy\.integrate/,          // ODE/integral solving
+        /solve_ivp\s*\(/,            // ODE solver
+    ],
+    quantum_model: [
+        /np\.linalg\.eig/,
+        /scipy\.linalg\.eig/,
+        /scipy\.linalg\.expm\s*\(/,
+        /time_evolve\s*\(/,
+        /density_matrix\s*\(/,
+        /tensor\s*\(/,
+        /solve_master_equation\s*\(/,
+        /lindblad_rhs\s*\(/,
+        /np\.linalg\.solve/,
+    ],
+    many_body_model: [
+        /np\.linalg\.eig/,
+        /scipy\.linalg\.eig/,
+        /bdg_hamiltonian\s*\(/,
+        /bcs_gap_equation\s*\(/,
+        /greens_function/,
+        /spectral_function/,
+        /lattice_2d\s*\(/,
+        /np\.linalg\.solve/,
+        /self_energy\s*\(/,
+    ],
+    coupled_dynamics: [
+        /solve_ode\s*\(/,
+        /solve_ivp\s*\(/,
+        /scipy\.integrate/,
+        /solve_master_equation\s*\(/,
+        /stability_eigenvalues\s*\(/,
+        /np\.linalg\.eig/,
+        /scipy\.linalg\.expm\s*\(/,
+    ],
+};
+
+/**
+ * Detect if generated code is likely a tautological formula evaluation
+ * rather than a real numerical computation.
+ *
+ * Returns a warning string if tautological, null if the code looks legitimate.
+ */
+function detectCodeTautology(code: string, specType: string): string | null {
+    const markers = COMPUTATION_MARKERS[specType];
+    if (!markers) return null; // Spec types like 'math', 'parameter_sweep' are inherently analytical
+
+    const hasAnyMarker = markers.some(pattern => pattern.test(code));
+    if (hasAnyMarker) return null; // Found real computation
+
+    // Count lines of actual computation (non-empty, non-comment, non-measure-call-only)
+    const lines = code.split('\n').filter(l => {
+        const trimmed = l.trim();
+        return trimmed.length > 0
+            && !trimmed.startsWith('#')
+            && !trimmed.startsWith('measure(')
+            && !trimmed.startsWith('result[');
+    });
+
+    // If code is very short AND has no computation markers, it's almost certainly
+    // just evaluating formulas. For longer code without markers, still flag but
+    // with less certainty.
+    if (lines.length < 60) {
+        return `Generated code for spec type "${specType}" contains no equation-solving operations `
+            + `(no eigenvalue decomposition, no transfer matrices, no ODE integration, no matrix solves). `
+            + `The code appears to evaluate analytical formulas directly rather than deriving results `
+            + `from numerical computation. For wave_system specs, you MUST build and solve a physical `
+            + `model (transfer matrix, eigenvalue problem, boundary value problem). Do NOT compute `
+            + `observables from textbook formulas — the result must emerge from solving equations.`;
+    }
+
+    return null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -581,6 +684,38 @@ export async function generateCode(
             `Codegen produced empty or trivial code. Raw response (first 500 chars): ${rawResponse.slice(0, 500)}`,
             'llm', true,
         );
+    }
+
+    // Post-generation tautology check: if the code looks like pure formula
+    // evaluation, do one internal retry with the warning injected as an "error"
+    // so the LLM sees the feedback and produces real computation code.
+    if (!previousAttempts?.length) {
+        const tautologyWarning = detectCodeTautology(computation, spec.specType);
+        if (tautologyWarning) {
+            const retryAttempts = [{ code: computation, error: tautologyWarning }];
+            const retryPrompt = buildPrompt(spec, retryAttempts);
+            try {
+                const retryResponse = await callLlm(retryPrompt, {
+                    role: 'codegen',
+                    jsonSchema: { name: 'codegen', schema: {} },
+                    signal: options?.signal,
+                });
+                let retryComputation = parseComputation(retryResponse);
+                if (!retryComputation) retryComputation = recoverTruncatedCode(retryResponse);
+                if (retryComputation && retryComputation.trim().length > 10) {
+                    // Check if retry actually fixed the tautology
+                    const stillTautological = detectCodeTautology(retryComputation, spec.specType);
+                    if (!stillTautological) {
+                        const retryCode = buildTemplate(retryComputation, spec);
+                        return { code: retryCode, prompt: retryPrompt, rawResponse: retryResponse };
+                    }
+                    // Retry didn't fix it — fall through to return original code
+                    // (let the evaluator judge it rather than blocking indefinitely)
+                }
+            } catch {
+                // Retry failed — fall through to return original code
+            }
+        }
     }
 
     const code = buildTemplate(computation, spec);
