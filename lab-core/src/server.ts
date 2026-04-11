@@ -100,6 +100,36 @@ export function createLabServer<TConfig extends BaseLabConfig>(options: LabServe
         }
     }
 
+    // ── Error enrichment — makes generic errors actionable ─────────────
+    function describeError(err: any, stage: string): string {
+        const msg = err.message || String(err);
+        const isTimeout = err.name === 'AbortError' || /abort|timeout/i.test(msg);
+        const isRateLimit = /429|rate.?limit|too many requests|overloaded|temporarily/i.test(msg);
+
+        if (isRateLimit) {
+            return `${stage}: LLM provider rate-limited or overloaded — will retry. (${msg.slice(0, 150)})`;
+        }
+        if (isTimeout) {
+            // Be specific about WHAT timed out based on the stage
+            if (stage === 'codegen') {
+                return `${stage}: LLM code-generation call timed out — the model took too long to respond. This is an LLM provider issue, not a sandbox or experiment issue.`;
+            }
+            if (stage === 'execution') {
+                return `${stage}: sandbox execution timed out after ${Math.round(cfg.sandbox.executionTimeoutMs / 1000)}s — the generated code ran too long. The experiment may need a smaller lattice, fewer sweep points, or a simpler model.`;
+            }
+            if (stage === 'evaluation') {
+                return `${stage}: evaluation LLM call timed out — the model took too long to interpret results.`;
+            }
+            return `${stage}: timed out (job limit: ${Math.round(cfg.execution.jobTimeoutMs / 1000)}s).`;
+        }
+        return `${stage}: ${msg.slice(0, 500)}`;
+    }
+
+    function formatAttemptErrors(errors: string[]): string {
+        if (errors.length <= 1) return errors[0] || 'Unknown error';
+        return `${errors.length} attempts failed:\n${errors.map(e => `  ${e}`).join('\n')}`;
+    }
+
     // ── Execution pipeline ────────────────────────────────────────────────
     async function executeSpec(jobId: string, signal: AbortSignal): Promise<void> {
         const jobRow = db.getJob(jobId);
@@ -111,10 +141,11 @@ export function createLabServer<TConfig extends BaseLabConfig>(options: LabServe
         const startMs = Date.now();
         const maxAttempts = (cfg.execution.retryLimit ?? 2) + 1;
         const previousAttempts: Array<{ code: string; error: string }> = [];
-        const ctx = { jobId, spec, artifactDir, signal };
+        const ctx = { jobId, spec, artifactDir, signal, jobStartMs: startMs, jobTimeoutMs: cfg.execution.jobTimeoutMs };
 
         try {
             let code = '';
+            const attemptErrors: string[] = []; // Track all errors across attempts
             for (let attempt = 1; attempt <= maxAttempts; attempt++) {
                 if (signal.aborted) { finishJob(jobId, { verdict: 'error', confidence: 0, artifacts: buildArtifactList(jobId), executionTimeMs: Date.now() - startMs, error: 'Job cancelled' }); return; }
 
@@ -127,14 +158,19 @@ export function createLabServer<TConfig extends BaseLabConfig>(options: LabServe
                     saveArtifact(jobId, artifactDir, `responses/codegen_raw_${attempt}.txt`, result.rawResponse, 'response');
                     saveArtifact(jobId, artifactDir, `code/experiment_${attempt}.py`, code, 'code');
                 } catch (err: any) {
-                    saveArtifact(jobId, artifactDir, `errors/codegen_attempt_${attempt}.txt`, err.message, 'log');
-                    broadcast('job:stage', { jobId, stage: 'codegen_failed', attempt, maxAttempts, error: err.message.slice(0, 200) });
+                    const enriched = describeError(err, 'codegen');
+                    attemptErrors.push(`Attempt ${attempt} codegen: ${enriched}`);
+                    saveArtifact(jobId, artifactDir, `errors/codegen_attempt_${attempt}.txt`, enriched, 'log');
+                    broadcast('job:stage', { jobId, stage: 'codegen_failed', attempt, maxAttempts, error: enriched.slice(0, 200) });
                     if ((err instanceof LabError && !err.retryable) || attempt === maxAttempts) {
-                        finishJob(jobId, { verdict: 'error', confidence: 0, artifacts: buildArtifactList(jobId), executionTimeMs: Date.now() - startMs, error: `Codegen failed: ${err.message}` });
+                        finishJob(jobId, { verdict: 'error', confidence: 0, artifacts: buildArtifactList(jobId), executionTimeMs: Date.now() - startMs, error: formatAttemptErrors(attemptErrors) });
                         return;
                     }
                     continue;
                 }
+
+                // Check abort before starting sandbox — codegen may have finished just as job timed out
+                if (signal.aborted) { finishJob(jobId, { verdict: 'error', confidence: 0, artifacts: buildArtifactList(jobId), executionTimeMs: Date.now() - startMs, error: 'Job timed out after codegen' }); return; }
 
                 // EXECUTE
                 broadcast('job:stage', { jobId, stage: 'executing', attempt, maxAttempts });
@@ -155,9 +191,13 @@ export function createLabServer<TConfig extends BaseLabConfig>(options: LabServe
                     const errorMsg = (typeof parsedError === 'string' && parsedError.length > 0)
                         ? parsedError.slice(0, 2000)
                         : (sandbox.stderr?.slice(0, 500) || 'Execution failed (no stderr)');
-                    broadcast('job:stage', { jobId, stage: 'exec_failed', attempt, maxAttempts, exitCode: sandbox.exitCode, error: errorMsg.slice(0, 200) });
+                    const execEnriched = sandbox.killed
+                        ? `Attempt ${attempt} execution: sandbox killed after ${Math.round((sandbox.executionTimeMs || 0) / 1000)}s (timeout: ${Math.round(cfg.sandbox.executionTimeoutMs / 1000)}s)`
+                        : `Attempt ${attempt} execution: ${errorMsg.slice(0, 300)}`;
+                    attemptErrors.push(execEnriched);
+                    broadcast('job:stage', { jobId, stage: 'exec_failed', attempt, maxAttempts, exitCode: sandbox.exitCode, error: execEnriched.slice(0, 200) });
                     if (attempt < maxAttempts) { previousAttempts.push({ code, error: errorMsg }); logger.warn({ jobId, attempt, maxAttempts, exitCode: sandbox.exitCode, killed: sandbox.killed, error: errorMsg }, 'Attempt failed'); continue; }
-                    finishJob(jobId, { verdict: 'error', confidence: 0, artifacts: buildArtifactList(jobId), executionTimeMs: Date.now() - startMs, error: errorMsg });
+                    finishJob(jobId, { verdict: 'error', confidence: 0, artifacts: buildArtifactList(jobId), executionTimeMs: Date.now() - startMs, error: formatAttemptErrors(attemptErrors) });
                     return;
                 }
 
@@ -169,13 +209,17 @@ export function createLabServer<TConfig extends BaseLabConfig>(options: LabServe
                     if (entries.length > 0 && errorCount === entries.length) {
                         const firstError = (entries[0][1] as any).error;
                         const errorMsg = `All ${errorCount} measurements failed. First: ${firstError}`;
+                        attemptErrors.push(`Attempt ${attempt}: ${errorMsg.slice(0, 300)}`);
                         if (attempt < maxAttempts) { previousAttempts.push({ code, error: errorMsg }); logger.warn({ jobId, attempt, maxAttempts, error: errorMsg }, 'All measurements failed'); continue; }
-                        finishJob(jobId, { verdict: 'error', confidence: 0, artifacts: buildArtifactList(jobId), executionTimeMs: Date.now() - startMs, error: errorMsg });
+                        finishJob(jobId, { verdict: 'error', confidence: 0, artifacts: buildArtifactList(jobId), executionTimeMs: Date.now() - startMs, error: formatAttemptErrors(attemptErrors) });
                         return;
                     }
                 }
 
                 collectNewArtifacts(jobId, artifactDir, cfg.execution.maxArtifactBytes);
+
+                // Check abort before eval — sandbox may have finished just as job timed out
+                if (signal.aborted) { finishJob(jobId, { verdict: 'error', confidence: 0, artifacts: buildArtifactList(jobId), executionTimeMs: Date.now() - startMs, error: 'Job timed out after sandbox execution' }); return; }
 
                 // EVALUATE
                 broadcast('job:stage', { jobId, stage: 'evaluating', attempt, maxAttempts });
@@ -193,8 +237,17 @@ export function createLabServer<TConfig extends BaseLabConfig>(options: LabServe
 
             finishJob(jobId, { verdict: 'error', confidence: 0, artifacts: buildArtifactList(jobId), executionTimeMs: Date.now() - startMs, error: 'All attempts exhausted' });
         } catch (err: any) {
+            const elapsed = Date.now() - startMs;
             const isAbort = err.name === 'AbortError' || signal.aborted;
-            finishJob(jobId, { verdict: 'error', confidence: 0, artifacts: buildArtifactList(jobId), executionTimeMs: Date.now() - startMs, error: isAbort ? 'Job cancelled or timed out' : err.message });
+            let error: string;
+            if (isAbort && signal.aborted) {
+                error = `Job cancelled after ${Math.round(elapsed / 1000)}s`;
+            } else if (isAbort) {
+                error = `Job timed out after ${Math.round(elapsed / 1000)}s (limit: ${Math.round(cfg.execution.jobTimeoutMs / 1000)}s). The experiment may need a simpler setup or the timeout may need increasing.`;
+            } else {
+                error = describeError(err, 'pipeline');
+            }
+            finishJob(jobId, { verdict: 'error', confidence: 0, artifacts: buildArtifactList(jobId), executionTimeMs: elapsed, error });
         }
     }
 
@@ -224,6 +277,15 @@ export function createLabServer<TConfig extends BaseLabConfig>(options: LabServe
         if (count > 0) {
             logger.info({ count }, 'Pruned old jobs');
             for (const dir of artifactDirs) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
+        }
+        // Cancel stale queued jobs that nobody is polling for.
+        // These are orphans from Podbit crashes, recovery loops, or network drops.
+        // Uses 2x the job timeout as the staleness threshold - if a job has been
+        // queued for that long without starting, its requester has moved on.
+        const staleThresholdMs = (cfg.execution.jobTimeoutMs ?? 600_000) * 2;
+        const staleCount = db.cancelStaleQueuedJobs(staleThresholdMs);
+        if (staleCount > 0) {
+            logger.info({ staleCount, thresholdMs: staleThresholdMs }, 'Cancelled stale queued jobs');
         }
     }
 
@@ -428,6 +490,8 @@ export function createLabServer<TConfig extends BaseLabConfig>(options: LabServe
 
     function start(): void {
         db.init(cfg.database?.path);
+        // Clean up stale jobs from previous crashes before starting the queue
+        runCleanup();
         queue.start();
         cleanupTimer = setInterval(runCleanup, 3600_000);
         httpServer = app.listen(cfg.port, () => {

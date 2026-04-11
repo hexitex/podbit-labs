@@ -17,10 +17,15 @@ const DEFAULT_EXECUTOR = join(__dirname, '..', 'executor.py');
 
 export { type SandboxResult };
 
-export async function executePython(code: string, executorPath?: string): Promise<SandboxResult> {
+export async function executePython(code: string, executorPath?: string, signal?: AbortSignal, timeoutMs?: number): Promise<SandboxResult> {
     const cfg = getConfig();
     const startTime = Date.now();
     const executor = executorPath || DEFAULT_EXECUTOR;
+
+    // If the job was already aborted before we even start, return immediately
+    if (signal?.aborted) {
+        return { success: false, stdout: '', stderr: 'Job aborted before sandbox execution', exitCode: -1, executionTimeMs: 0, killed: true };
+    }
 
     let tempDir: string;
     let codePath: string;
@@ -71,7 +76,7 @@ export async function executePython(code: string, executorPath?: string): Promis
         let proc;
         try {
             proc = spawn(sb.pythonPath, [executor, codePath, networkKill], {
-                timeout: sb.executionTimeoutMs,
+                timeout: timeoutMs ?? sb.executionTimeoutMs,
                 env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
                 windowsHide: true,
                 stdio: ['ignore', 'pipe', 'pipe'],
@@ -83,7 +88,21 @@ export async function executePython(code: string, executorPath?: string): Promis
             if (stdout.length > sb.maxOutputBytes) { killed = true; proc.kill('SIGTERM'); }
         });
         proc.stderr!.on('data', (data: Buffer) => { stderr += data.toString(); });
-        proc.on('close', (exitCode: number | null, signal: string | null) => finish(exitCode ?? -1, signal));
+        proc.on('close', (exitCode: number | null, sig: string | null) => finish(exitCode ?? -1, sig));
         proc.on('error', (err: Error) => { stderr += err.message; finish(-1, null); });
+
+        // Kill subprocess when the job's abort signal fires (job timeout or cancellation)
+        if (signal) {
+            const onAbort = () => {
+                if (!resolved) {
+                    killed = true;
+                    stderr += '\nJob aborted - killing sandbox process';
+                    proc.kill('SIGTERM');
+                }
+            };
+            signal.addEventListener('abort', onAbort, { once: true });
+            // Clean up the listener when the process finishes normally
+            proc.on('close', () => signal.removeEventListener('abort', onAbort));
+        }
     });
 }

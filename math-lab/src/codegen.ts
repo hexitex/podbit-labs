@@ -10,7 +10,7 @@
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { callLlm, getConfig, LabError, TruncatedError, type CodegenResult, type ExperimentSpec } from '@lab/core';
+import { callLlm, getConfig, logger, LabError, TruncatedError, type CodegenResult, type ExperimentSpec } from '@lab/core';
 
 const TEMPLATE_PATH = join(process.cwd(), 'prompts', 'template.py');
 
@@ -157,6 +157,22 @@ const ALL_SECTIONS: Record<string, string> = {
     coupled: SECTION_COUPLED,
 };
 
+/** Short helper name list for the plan prompt — keeps it under 200 tokens. */
+function getHelperNameList(specType: string): string {
+    const core = 'measure, values_close, relative_error, hp_eval, test_convergence, partial_sums, analyze_curve, sweep, linspace_sweep, sym_to_float, sym_limit, sym_sum_to_float';
+    const quantum = 'tensor, partial_trace, density_matrix, expect, commutator, von_neumann_entropy, fidelity, time_evolve, lindblad_rhs, bell_state, chsh_value';
+    const quantum_optics = 'creation_op, annihilation_op, number_op, squeeze_operator, two_mode_squeeze, jaynes_cummings_H, heisenberg_exchange_H, concurrence';
+    const wave = 'tight_binding_1d, band_structure_1d, transfer_matrix, transmission_coefficient, disorder_sweep';
+    const many_body = 'lattice_2d, bdg_hamiltonian, bcs_gap_equation, greens_function_retarded, spectral_function, density_of_states, superfluid_weight, self_energy, quasiparticle_weight, matsubara_greens';
+    const rg = 'polchinski_rg_flow, rg_fixed_points, couple_subsystems, coupling_sweep, time_ordered_evolution, compare_orderings, chern_number_2d, test_causal_chain, with_and_without, critical_exponents';
+    const coupled = 'solve_ode, stability_eigenvalues, find_threshold, solve_master_equation, wigner_function';
+    const relativistic = 'four_vector, lorentz_boost, boost_4vec, mandelstam_s, verify_lorentz_invariance';
+
+    const needed = SPEC_TYPE_SECTIONS[specType] || Object.keys(ALL_SECTIONS);
+    const sectionMap: Record<string, string> = { core, quantum, quantum_optics, wave, many_body, rg, coupled, relativistic };
+    return needed.map(key => sectionMap[key]).filter(Boolean).join(', ');
+}
+
 function getHelperSections(specType: string): string {
     const needed = SPEC_TYPE_SECTIONS[specType] || Object.keys(ALL_SECTIONS);
     return needed.map(key => ALL_SECTIONS[key]).filter(Boolean).join('\n\n');
@@ -233,12 +249,79 @@ function getPhysicsGuidance(specType: string): string {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PROMPT BUILDER
+// PASS 1: PLAN — short JSON describing what to compute and how
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface Plan {
+    approach: string;       // 1-2 sentence summary of the numerical method
+    helpers: string[];      // which template helpers to use (e.g. "measure", "sweep", "tight_binding_1d")
+    measurements: string[]; // labels that will appear in the result dict
+    libraries: string[];    // which libraries are needed (e.g. "numpy", "scipy.linalg")
+    parameters: Record<string, any>; // key numeric parameters (lattice size, sweep points, etc.)
+}
+
+function buildPlanPrompt(spec: ExperimentSpec): string {
+    const setupDesc = Object.entries(spec.setup)
+        .map(([k, v]) => `  ${k}: ${JSON.stringify(v)}`)
+        .join('\n');
+
+    const cfg = getConfig();
+    let specTypeDesc = spec.specType;
+    const specTypes = cfg.capabilities?.specTypes;
+    if (specTypes && typeof specTypes === 'object' && !Array.isArray(specTypes)) {
+        const desc = (specTypes as Record<string, string>)[spec.specType];
+        if (desc) specTypeDesc = `${spec.specType} — ${desc}`;
+    }
+
+    // Short helper name list — NOT full signatures. The plan just needs to know
+    // what's available, not every parameter. Full signatures go in the code prompt.
+    const helperNames = getHelperNameList(spec.specType);
+
+    return `Plan a computational experiment. Be brief — output only JSON, no reasoning.
+
+TYPE: ${specTypeDesc}
+HYPOTHESIS: ${spec.hypothesis}
+SETUP:
+${setupDesc}
+
+AVAILABLE HELPERS: ${helperNames}
+LIBRARIES: numpy, scipy, sympy, mpmath, networkx, numba
+
+Respond with JSON only:
+{"approach":"1-2 sentences: numerical method","helpers":["names"],"measurements":["result keys"],"libraries":["needed"],"parameters":{"key":value}}`;
+}
+
+function parsePlan(raw: string): Plan | null {
+    try {
+        const parsed = JSON.parse(raw);
+        if (parsed.approach && parsed.measurements) return parsed as Plan;
+    } catch { /* not whole JSON */ }
+    const block = raw.match(/```json\s*([\s\S]*?)```/);
+    if (block) {
+        try {
+            const parsed = JSON.parse(block[1]);
+            if (parsed.approach) return parsed as Plan;
+        } catch { /* fall through */ }
+    }
+    const obj = matchBalancedObject(raw);
+    if (obj) {
+        try {
+            const parsed = JSON.parse(obj);
+            if (parsed.approach) return parsed as Plan;
+        } catch { /* fall through */ }
+    }
+    return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PASS 2: CODE — generate computation from plan
 // ═══════════════════════════════════════════════════════════════════════════
 
 interface PromptOptions {
     /** If true, add a conciseness instruction (used on truncation retry) */
     concise?: boolean;
+    /** Plan from pass 1 — injected into the code prompt so the LLM doesn't need to re-derive the approach */
+    plan?: Plan;
 }
 
 function buildPrompt(spec: ExperimentSpec, previousAttempts?: Array<{ code: string; error: string }>, opts?: PromptOptions): string {
@@ -291,6 +374,29 @@ YOUR JOB: Identify the exact line/identifier the error points at, fix it, and re
         ? '\n\nCRITICAL: Your previous response was TRUNCATED because it exceeded the output token limit. Write CONCISE code — avoid verbose variable names, minimize comments, combine setup steps. Focus on the essential computation.'
         : '';
 
+    // If we have a plan, inject it so the LLM skips the design step and goes straight to code
+    const planBlock = opts?.plan
+        ? `\nPLAN (already decided — follow this, do not redesign):
+  Approach: ${opts.plan.approach}
+  Helpers to use: ${opts.plan.helpers.join(', ')}
+  Measurements to produce: ${opts.plan.measurements.join(', ')}
+  Libraries: ${opts.plan.libraries.join(', ')}
+  Parameters: ${JSON.stringify(opts.plan.parameters)}
+
+Implement this plan as computation code. Do not deviate from the approach or measurements listed above.\n`
+        : '';
+
+    const taskBlock = opts?.plan
+        ? `YOUR TASK:
+1. Implement the plan above — the approach and measurements are already decided
+2. Store results using measure("label", lambda: computation)
+3. Include a "supported" key: measure("supported", lambda: True/False) based on your measurements`
+        : `YOUR TASK:
+1. Design measurements that would support or refute the hypothesis
+2. Compute them using the setup parameters and available libraries
+3. Store results in the result dict using measure("label", lambda: computation)
+4. Include a "supported" key: measure("supported", lambda: True/False) based on your measurements`;
+
     return `Write ONLY the computation code to test this hypothesis. Do NOT write imports or boilerplate.
 
 EVERYTHING BELOW IS ALREADY IN SCOPE — just use it:
@@ -308,13 +414,9 @@ ${spec.hypothesis}
 
 SETUP:
 ${setupDesc}
-${errorFeedback}${conciseHint}
+${planBlock}${errorFeedback}${conciseHint}
 
-YOUR TASK:
-1. Design measurements that would support or refute the hypothesis
-2. Compute them using the setup parameters and available libraries
-3. Store results in the result dict using measure("label", lambda: computation)
-4. Include a "supported" key: measure("supported", lambda: True/False) based on your measurements
+${taskBlock}
 
 CONVENTIONS:
 - Write top-level code — no function wrappers, no \`if __name__\` blocks, no imports (everything is already in scope)
@@ -623,7 +725,31 @@ export async function generateCode(
     previousAttempts?: Array<{ code: string; error: string }>,
     options?: CodegenOptions,
 ): Promise<CodegenResult> {
-    const prompt = buildPrompt(spec, previousAttempts);
+
+    // ── PASS 1: PLAN (skip on retries — we already have code context) ────
+    let plan: Plan | null = null;
+    if (!previousAttempts?.length) {
+        try {
+            const planPrompt = buildPlanPrompt(spec);
+            const planRaw = await callLlm(planPrompt, {
+                role: 'codegen',
+                jsonSchema: { name: 'plan', schema: {} },
+                signal: options?.signal,
+            });
+            plan = parsePlan(planRaw);
+            if (plan) {
+                logger.info({ specType: spec.specType, approach: plan.approach, measurements: plan.measurements.length }, 'Codegen plan produced');
+            } else {
+                logger.warn({ rawLen: planRaw.length }, 'Plan response could not be parsed — proceeding without plan');
+            }
+        } catch (err: any) {
+            // Plan call failed — not fatal, fall through to single-pass codegen
+            logger.warn({ error: err.message?.slice(0, 150) }, 'Plan call failed — falling back to single-pass codegen');
+        }
+    }
+
+    // ── PASS 2: CODE (with plan context if available) ────────────────────
+    const prompt = buildPrompt(spec, previousAttempts, { plan: plan ?? undefined });
 
     let rawResponse: string;
     try {
@@ -641,8 +767,8 @@ export async function generateCode(
                 return { code, prompt, rawResponse: err.partialContent };
             }
 
-            // Attempt 2: retry with a compact prompt (conciseness hint + filtered helpers)
-            const compactPrompt = buildPrompt(spec, previousAttempts, { concise: true });
+            // Attempt 2: retry with a compact prompt (conciseness hint + plan if we have it)
+            const compactPrompt = buildPrompt(spec, previousAttempts, { concise: true, plan: plan ?? undefined });
             try {
                 rawResponse = await callLlm(compactPrompt, {
                     role: 'codegen',
@@ -651,13 +777,11 @@ export async function generateCode(
                 });
             } catch (retryErr: unknown) {
                 if (retryErr instanceof TruncatedError) {
-                    // Still truncated — try recovery from compact attempt
                     const recovered2 = recoverTruncatedCode(retryErr.partialContent);
                     if (recovered2 && recovered2.length > 50) {
                         const code = buildTemplate(recovered2, spec);
                         return { code, prompt: compactPrompt, rawResponse: retryErr.partialContent };
                     }
-                    // Give up with a clear message
                     throw new LabError(
                         `Codegen truncated twice. Model output limit too low for this experiment. Recovered ${recovered2.length} chars but insufficient. Raw (first 500 chars): ${retryErr.partialContent.slice(0, 500)}`,
                         'llm', false,
@@ -674,7 +798,6 @@ export async function generateCode(
     let computation = parseComputation(rawResponse);
 
     // Fallback: try truncation recovery even on non-TruncatedError responses
-    // (some providers don't report finish_reason: length)
     if (!computation) {
         computation = recoverTruncatedCode(rawResponse);
     }
@@ -686,14 +809,12 @@ export async function generateCode(
         );
     }
 
-    // Post-generation tautology check: if the code looks like pure formula
-    // evaluation, do one internal retry with the warning injected as an "error"
-    // so the LLM sees the feedback and produces real computation code.
+    // Post-generation tautology check (only on first attempt, not retries)
     if (!previousAttempts?.length) {
         const tautologyWarning = detectCodeTautology(computation, spec.specType);
         if (tautologyWarning) {
             const retryAttempts = [{ code: computation, error: tautologyWarning }];
-            const retryPrompt = buildPrompt(spec, retryAttempts);
+            const retryPrompt = buildPrompt(spec, retryAttempts, { plan: plan ?? undefined });
             try {
                 const retryResponse = await callLlm(retryPrompt, {
                     role: 'codegen',
@@ -703,14 +824,11 @@ export async function generateCode(
                 let retryComputation = parseComputation(retryResponse);
                 if (!retryComputation) retryComputation = recoverTruncatedCode(retryResponse);
                 if (retryComputation && retryComputation.trim().length > 10) {
-                    // Check if retry actually fixed the tautology
                     const stillTautological = detectCodeTautology(retryComputation, spec.specType);
                     if (!stillTautological) {
                         const retryCode = buildTemplate(retryComputation, spec);
                         return { code: retryCode, prompt: retryPrompt, rawResponse: retryResponse };
                     }
-                    // Retry didn't fix it — fall through to return original code
-                    // (let the evaluator judge it rather than blocking indefinitely)
                 }
             } catch {
                 // Retry failed — fall through to return original code

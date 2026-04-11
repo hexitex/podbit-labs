@@ -4,10 +4,21 @@
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { Agent, setGlobalDispatcher } from 'undici';
 import { getConfig } from './config.js';
 import type { ModelSlotConfig } from './types.js';
 import { LabError, TruncatedError } from './errors.js';
 import { logger } from './logger.js';
+
+// Extend undici's default headers/body timeouts for all fetch calls in this process.
+// Reasoning models can think for minutes before sending the first response byte —
+// the default 60s headersTimeout kills these calls. The abort signal handles cancellation.
+setGlobalDispatcher(new Agent({
+    headersTimeout: 3_600_000,  // 1 hour — reasoning models can think this long before first byte
+    bodyTimeout: 3_600_000,     // 1 hour — streaming responses from slow thinking models
+    connectTimeout: 30_000,     // 30s — connection establishment should be fast
+    keepAliveTimeout: 30_000,
+}));
 
 export type LlmRole = 'codegen' | 'evaluation';
 
@@ -53,6 +64,15 @@ interface ProviderCallOptions {
     noThink?: boolean;
 }
 
+/** Delay that resolves immediately if the abort signal fires. */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.resolve();
+    return new Promise(resolve => {
+        const timer = setTimeout(resolve, ms);
+        signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+}
+
 function stripThinkingBlocks(text: string): string {
     let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
     cleaned = cleaned.replace(/^<think>[\s\S]*$/gi, '').trim();
@@ -60,7 +80,10 @@ function stripThinkingBlocks(text: string): string {
 }
 
 function mergeSignals(signal?: AbortSignal, timeoutMs?: number): AbortSignal {
-    const timeout = AbortSignal.timeout(timeoutMs || 90000);
+    // timeoutMs=0 means "no independent LLM timeout — rely on the job's abort signal."
+    // Only create a timeout signal when a positive value is explicitly configured.
+    if (!timeoutMs || timeoutMs <= 0) return signal || AbortSignal.timeout(900_000); // 15 min safety net if no signal at all
+    const timeout = AbortSignal.timeout(timeoutMs);
     if (!signal) return timeout;
     return AbortSignal.any([signal, timeout]);
 }
@@ -214,17 +237,38 @@ async function callPodbit(
     };
     const bodyJson = JSON.stringify(bodyObj);
 
-    const signal = mergeSignals(opts.signal, opts.timeoutMs || 900_000);
+    // Podbit's model registry requestTimeout is the real timeout for the LLM call.
+    // Lab side just relies on the job's abort signal (opts.signal) to stay within budget.
+    const signal = mergeSignals(opts.signal, opts.timeoutMs);
     const maxRetries = 10;
     let lastError = '';
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: bodyJson,
-            signal,
-        });
+        let response: Response;
+        try {
+            response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: bodyJson,
+                signal,
+            });
+        } catch (fetchErr: any) {
+            // Connection refused, DNS failure, Podbit restarting, network blip
+            const detail = describeNetworkError(fetchErr) || fetchErr.message || 'fetch failed';
+            lastError = `Podbit unreachable at ${podbitUrl}: ${detail}`;
+
+            // AbortError = caller cancelled or job timed out — don't retry
+            if (fetchErr.name === 'AbortError') {
+                throw new LabError(lastError, 'llm', false);
+            }
+
+            // Transient network error — wait and retry
+            const delay = Math.min(3000 * (attempt + 1), 15000);
+            logger.warn({ subsystem, attempt, delay, error: detail }, 'Podbit connection failed — retrying');
+            if (attempt >= maxRetries - 1) break; // fall through to "retries exhausted"
+            await abortableDelay(delay, signal);
+            continue;
+        }
 
         if (response.status === 429) {
             // Model at capacity or rate-limited — wait and retry
@@ -235,7 +279,7 @@ async function callPodbit(
                 lastError = errData.error || 'rate limited';
                 logger.info({ subsystem, attempt, retryMs, model: errData.model }, 'Podbit 429 — waiting for capacity');
             } catch { /* ignore parse error */ }
-            await new Promise(r => setTimeout(r, retryMs));
+            await abortableDelay(retryMs, signal);
             continue;
         }
 
@@ -253,7 +297,7 @@ async function callPodbit(
     }
 
     // All retries exhausted
-    throw new LabError(`Podbit LLM proxy: max retries (${maxRetries}) exhausted for "${subsystem}": ${lastError}`, 'llm', false);
+    throw new LabError(`Podbit LLM proxy: ${maxRetries} attempts failed for "${subsystem}". Last error: ${lastError}`, 'llm', true);
 }
 
 export async function callLlm(prompt: string, options: LlmCallOptions = {}): Promise<string> {
@@ -274,13 +318,18 @@ export async function callLlm(prompt: string, options: LlmCallOptions = {}): Pro
             messages.push({ role: 'user', content: prompt });
         }
 
+        // When routing through Podbit, don't override Podbit's model registry settings
+        // with the lab's local (often placeholder) model slot config. Podbit owns:
+        //   - maxTokens (from model_registry.max_tokens)
+        //   - timeout (from model_registry.request_timeout + retry_window_minutes)
+        // Only pass values the caller explicitly set in options (e.g. the codegen call
+        // may want a specific temperature). The local slot defaults are irrelevant.
         logger.debug({ role, subsystem, podbitUrl: cfg.podbit.url, promptLen: prompt.length }, 'Podbit LLM call starting');
         let result = await callPodbit(cfg.podbit.url, subsystem, role, messages, {
-            maxTokens: options.maxTokens ?? slot.maxTokens,
-            temperature: options.temperature ?? slot.temperature,
+            maxTokens: options.maxTokens,      // only if caller explicitly set it
+            temperature: options.temperature,   // only if caller explicitly set it
             jsonSchema: options.jsonSchema,
             signal: options.signal,
-            timeoutMs: slot.timeoutMs,
         });
         if (slot.stripThinking) {
             const stripped = stripThinkingBlocks(result);

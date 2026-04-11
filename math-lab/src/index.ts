@@ -46,8 +46,13 @@ const pipeline: LabPipeline = {
         return generateCode(ctx.spec, previousAttempts, { signal: ctx.signal });
     },
 
-    async execute(_ctx: PipelineContext, code: string) {
-        return executePython(code);
+    async execute(ctx: PipelineContext, code: string) {
+        // Cap sandbox timeout to remaining job budget so it can't exceed the job timeout.
+        // Leave a buffer for the evaluation LLM call that follows.
+        const EVAL_BUFFER_MS = 60_000; // 60s for evaluation LLM
+        const elapsed = Date.now() - ctx.jobStartMs;
+        const remaining = Math.max(10_000, ctx.jobTimeoutMs - elapsed - EVAL_BUFFER_MS);
+        return executePython(code, undefined, ctx.signal, remaining);
     },
 
     async evaluate(ctx: PipelineContext, sandbox) {

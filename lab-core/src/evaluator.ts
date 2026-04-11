@@ -34,15 +34,44 @@ export async function evaluate(
 
     // Check if the code produced a direct verdict
     if ('supported' in output && typeof output.supported === 'boolean') {
+        // Count real measurements (non-error, non-metadata entries)
+        const metaKeys = new Set(['supported', 'confidence', 'explanation', 'error', 'verified', 'testability']);
+        const measurements = Object.entries(output)
+            .filter(([k, v]) => !metaKeys.has(k) && !(v && typeof v === 'object' && 'error' in (v as any)));
+        const errorEntries = Object.entries(output)
+            .filter(([k, v]) => !metaKeys.has(k) && v && typeof v === 'object' && 'error' in (v as any));
+
+        // If "supported: false" but no real measurements were computed, the code
+        // likely crashed and set supported=false as a fallback. That's an execution
+        // failure, not a physics refutation — don't let it poison the knowledge graph.
+        if (!output.supported && measurements.length === 0) {
+            const errorSummary = errorEntries.length > 0
+                ? errorEntries.map(([k, v]) => `${k}: ${(v as any).error}`).join('; ')
+                : 'Code set supported=false but produced no measurements';
+            return {
+                verdict: 'error', confidence: 0,
+                details: `Computation failed — no measurements produced. ${errorSummary}`,
+            };
+        }
+
         const details = Object.entries(output)
             .filter(([k]) => k !== 'supported' && k !== 'confidence')
             .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
             .join('; ');
-        return {
-            verdict: output.supported ? 'supported' : 'refuted',
-            confidence: output.confidence ?? 0.85,
-            details: details || `Code verdict: ${output.supported ? 'supported' : 'refuted'}`,
-        };
+
+        // Don't blindly trust the code's own verdict at high confidence.
+        // Send to the LLM evaluator for proper analysis when measurements exist.
+        // Only use the direct path for simple boolean results with high signal.
+        if (measurements.length >= 3) {
+            // Enough data for the LLM to reason about — let it evaluate properly
+            // instead of trusting the code's one-bit summary
+        } else {
+            return {
+                verdict: output.supported ? 'supported' : 'refuted',
+                confidence: Math.min(output.confidence ?? 0.7, 0.7),
+                details: details || `Code verdict: ${output.supported ? 'supported' : 'refuted'}`,
+            };
+        }
     }
 
     // Fall back to LLM interpretation

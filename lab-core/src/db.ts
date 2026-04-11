@@ -197,6 +197,23 @@ export function getJobArtifacts(jobId: string): ArtifactRow[] {
     return getDb().prepare('SELECT * FROM artifacts WHERE job_id = ? ORDER BY id').all(jobId) as ArtifactRow[];
 }
 
+/**
+ * Cancel queued jobs older than maxAgeMs. These are orphans from Podbit
+ * crashes or recovery loops - nobody is polling for their result.
+ * Running jobs are left alone (they have their own timeout via AbortController).
+ */
+export function cancelStaleQueuedJobs(maxAgeMs: number = 600_000): number {
+    const maxAgeSeconds = Math.round(maxAgeMs / 1000);
+    const result = getDb().prepare(`
+        UPDATE jobs SET status = 'failed',
+            result = json('{"verdict":"error","confidence":0,"error":"Stale job cancelled - queued for ' || ? || 's with no activity"}'),
+            completed_at = datetime('now')
+        WHERE status = 'queued'
+          AND created_at < datetime('now', '-' || ? || ' seconds')
+    `).run(maxAgeSeconds, maxAgeSeconds);
+    return result.changes;
+}
+
 export function pruneOldJobs(maxAgeDays: number = 7): { count: number; artifactDirs: string[] } {
     const rows = getDb().prepare(`
         SELECT artifact_dir FROM jobs WHERE status IN ('completed', 'failed')

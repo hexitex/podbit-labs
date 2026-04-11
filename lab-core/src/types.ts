@@ -80,6 +80,10 @@ export interface PipelineContext {
     spec: ExperimentSpec;
     artifactDir: string;
     signal: AbortSignal;
+    /** Timestamp (Date.now()) when the job started. Used to compute remaining time budget. */
+    jobStartMs: number;
+    /** Total job timeout in ms. Sandbox uses min(executionTimeoutMs, remaining) to stay within budget. */
+    jobTimeoutMs: number;
 }
 
 export interface LabPipeline {

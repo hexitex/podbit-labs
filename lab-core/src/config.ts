@@ -53,7 +53,7 @@ export function loadModelSlot(fileSlot: any, envPrefix: string, defaults: Partia
         apiKey: process.env[`${envPrefix}_API_KEY`] || fileSlot?.apiKey || defaults.apiKey || 'ollama',
         maxTokens: parseInt(process.env[`${envPrefix}_MAX_TOKENS`] || '', 10) || fileSlot?.maxTokens || defaults.maxTokens || 4096,
         temperature: parseFloat(process.env[`${envPrefix}_TEMPERATURE`] || '') || (fileSlot?.temperature ?? (defaults.temperature ?? 0.15)),
-        timeoutMs: fileSlot?.timeoutMs || defaults.timeoutMs || 90000,
+        timeoutMs: fileSlot?.timeoutMs || defaults.timeoutMs || 0, // 0 = use job remaining time
         systemPrompt: fileSlot?.systemPrompt || defaults.systemPrompt || undefined,
         mergeSystemPrompt: fileSlot?.mergeSystemPrompt ?? defaults.mergeSystemPrompt ?? false,
         stripThinking: fileSlot?.stripThinking ?? defaults.stripThinking ?? false,
@@ -107,7 +107,7 @@ export function loadConfig<T extends BaseLabConfig>(labDefaults: Partial<T>, con
         models: {
             codegen: codegenSlot,
             evaluation: f.models?.evaluation
-                ? loadModelSlot(f.models.evaluation, 'EVAL_LLM', { timeoutMs: 30000, maxTokens: 1500, temperature: 0.1 })
+                ? loadModelSlot(f.models.evaluation, 'EVAL_LLM', { maxTokens: 1500, temperature: 0.1 })
                 : undefined,
             fallback: f.models?.fallback
                 ? loadModelSlot(f.models.fallback, 'FALLBACK_LLM', {})
