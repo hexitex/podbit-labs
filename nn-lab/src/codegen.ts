@@ -40,10 +40,22 @@ function buildPrompt(spec: ExperimentSpec, artifactDir: string, previousAttempts
 
     let errorFeedback = '';
     if (previousAttempts?.length) {
-        errorFeedback = '\n\nPREVIOUS FAILED ATTEMPTS — fix these errors:\n' +
-            previousAttempts.map((a, i) =>
-                `Attempt ${i + 1}:\nCode (first 800 chars):\n${a.code.slice(0, 800)}\nError: ${a.error}`
-            ).join('\n\n');
+        const latest = previousAttempts[previousAttempts.length - 1];
+        const earlier = previousAttempts.slice(0, -1);
+        const earlierBlock = earlier.length > 0
+            ? earlier.map((a, i) => `Attempt ${i + 1} error: ${a.error.slice(0, 300)}`).join('\n') + '\n\n'
+            : '';
+        errorFeedback = `\n\nPREVIOUS FAILED ATTEMPTS — fix the error. Keep what works, fix what's broken.
+
+${earlierBlock}YOUR PREVIOUS CODE:
+\`\`\`python
+${latest.code.slice(0, 3000)}
+\`\`\`
+
+ERROR:
+${latest.error}
+
+Fix the broken line and return the full corrected code.`;
     }
 
     const constraints = spec.setup?.constraints || {};
@@ -101,6 +113,37 @@ function extractCode(rawResponse: string): string {
     if (anyBlock) return anyBlock[1].trim();
 
     return '';
+}
+
+/**
+ * Detect chain-of-thought leakage in generated code.
+ * Some models (especially smaller ones) embed reasoning, self-corrections,
+ * or HTML artifacts directly in the code string. Catching this early avoids
+ * wasting a preflight attempt on obviously broken code.
+ */
+function detectThinkingLeakage(code: string): string | null {
+    const lines = code.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const lineNum = i + 1;
+
+        // Self-correction comments: "# Wait", "# Actually", "# I see", "# Hmm"
+        if (/^[^#]*#\s*(Wait|Actually|I see|Hmm|Let me|I think|I need to|I will|I should|Oops|Sorry)\b/i.test(line)) {
+            return `Line ${lineNum}: chain-of-thought leaked into code: "${line.trim().slice(0, 120)}"`;
+        }
+
+        // HTML-like fragments that aren't in string literals
+        if (!line.match(/^\s*#/) && !line.match(/['"].*<\/?[a-z].*['"]/) && /<\/?\w+[^>]*>/.test(line)) {
+            return `Line ${lineNum}: HTML fragment in code: "${line.trim().slice(0, 120)}"`;
+        }
+
+        // Multiple def/class statements on a single line (stream-of-consciousness)
+        if (/\)\s+(def |class )\w/.test(line)) {
+            return `Line ${lineNum}: multiple definitions crammed on one line: "${line.trim().slice(0, 120)}"`;
+        }
+    }
+
+    return null;
 }
 
 // =============================================================================
@@ -217,6 +260,38 @@ except Exception as _e:
 // =============================================================================
 
 /**
+ * Translate sandbox line numbers to generated-code-relative line numbers.
+ * The wrapper adds ~30 lines (non-preflight) or ~80 lines (preflight)
+ * before the try: block where generated code is indented.
+ */
+function enrichNNError(error: string, generatedCode: string, preflight: boolean): string {
+    // Count wrapper lines before the generated code insertion point
+    const wrapperBefore = wrapScript('__MARKER__', '/tmp', preflight);
+    const markerIndex = wrapperBefore.split('\n').findIndex(l => l.includes('__MARKER__'));
+    const offset = markerIndex >= 0 ? markerIndex : (preflight ? 80 : 30);
+
+    return error.replace(/line (\d+)/g, (match, num) => {
+        const absLine = parseInt(num, 10);
+        const relLine = absLine - offset;
+        if (relLine < 1) return match; // line is in the wrapper, not generated code
+
+        const codeLines = generatedCode.split('\n');
+        if (relLine > codeLines.length) return match;
+
+        // Show the broken line
+        const contextStart = Math.max(0, relLine - 3);
+        const contextEnd = Math.min(codeLines.length, relLine + 2);
+        const snippet = codeLines.slice(contextStart, contextEnd)
+            .map((l, i) => {
+                const ln = contextStart + i + 1;
+                return `${ln === relLine ? ' >>>' : '    '} ${ln}: ${l}`;
+            }).join('\n');
+
+        return `line ${relLine} of your code\n\nYour code around the error:\n${snippet}`;
+    });
+}
+
+/**
  * Run a quick preflight check: syntax validation + 1-epoch dry run.
  * Catches compile errors, import errors, shape mismatches, and API misuse
  * in seconds instead of 30 minutes.
@@ -231,16 +306,12 @@ async function preflightValidate(generatedCode: string, artifactDir: string): Pr
         return null; // passed
     }
 
-    // Extract useful error from stderr — include traceback context so the LLM
-    // can understand WHICH line failed and WHY, not just the exception type.
     const stderr = result.stderr || '';
     const lines = stderr.trim().split('\n');
-    if (lines.length <= 5) {
-        return `Preflight failed: ${lines.join('\n')}`;
-    }
-    // Include the last 8 lines (typically: traceback header + 3 stack frames + exception)
-    const tail = lines.slice(-8).join('\n');
-    return `Preflight failed:\n${tail}`;
+    const raw = lines.length <= 5 ? lines.join('\n') : lines.slice(-8).join('\n');
+
+    // Translate line numbers so the LLM can find the broken code
+    return `Preflight failed:\n${enrichNNError(raw, generatedCode, true)}`;
 }
 
 // =============================================================================
@@ -288,11 +359,26 @@ export async function generateTrainingCode(
             );
         }
 
+        // Thinking leakage detection: catch models that embed reasoning in code
+        const leakage = detectThinkingLeakage(generatedCode);
+        if (leakage) {
+            console.error(`[nn-lab] Thinking leakage detected (attempt ${attempt + 1}/${maxCodegenAttempts + 1}): ${leakage}`);
+            attempts.push({
+                code: generatedCode,
+                error: `EXECUTOR ERROR: ${leakage}\n\nYour code contained reasoning text, HTML fragments, or self-corrections mixed into the Python source. Return ONLY clean, syntactically valid Python in the "code" field. Do not embed your thinking process.`,
+            });
+            if (attempt < maxCodegenAttempts) continue;
+            throw new LabError(
+                `Codegen failed all ${maxCodegenAttempts + 1} attempts due to thinking leakage. Last: ${leakage}`,
+                'llm', true,
+            );
+        }
+
         // Preflight: dry run with 2-batch DataLoaders catches runtime errors in seconds
         const preflightError = await preflightValidate(generatedCode, artifactDir);
         if (preflightError) {
             console.error(`[nn-lab] Preflight failed (attempt ${attempt + 1}/${maxCodegenAttempts + 1}): ${preflightError}`);
-            attempts.push({ code: generatedCode.slice(0, 1000), error: preflightError });
+            attempts.push({ code: generatedCode, error: preflightError });
             if (attempt < maxCodegenAttempts) continue; // retry with error feedback
             // Final attempt also failed — do NOT submit broken code for full execution.
             // It wastes GPU hours and produces confusing "incomplete" results.

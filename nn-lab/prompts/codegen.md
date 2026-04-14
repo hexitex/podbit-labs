@@ -113,4 +113,12 @@ result = {"_error": "not testable on current hardware: <reason>"}
 - File I/O is restricted to `artifact_dir`.
 - No subprocess.
 
+## Code Quality
+
+The `"code"` value must be clean, runnable Python — no reasoning, no commentary, no self-corrections. Specifically:
+- Do NOT embed your thinking process, scratch work, or corrections inside the code string.
+- Do NOT write multiple statements on a single line separated by comments like `# Wait` or `# Actually`.
+- Every line must be syntactically valid Python. No HTML fragments, no prose, no partial thoughts.
+- If you catch a mistake while writing, start the code over — do not leave the broken version inline.
+
 Respond with JSON: {"code": "your complete training script here"}

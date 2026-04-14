@@ -136,6 +136,19 @@ async function callOpenAICompatible(
     let buffer = '';
     let finishReason = '';
 
+    const processLine = (line: string) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed === 'data: [DONE]') return;
+        if (!trimmed.startsWith('data: ')) return;
+        try {
+            const chunk = JSON.parse(trimmed.slice(6));
+            const delta = chunk.choices?.[0]?.delta?.content;
+            if (delta) content += delta;
+            const fr = chunk.choices?.[0]?.finish_reason;
+            if (fr) finishReason = fr;
+        } catch { /* skip malformed chunk */ }
+    };
+
     try {
         while (true) {
             const { done, value } = await reader.read();
@@ -145,20 +158,10 @@ async function callOpenAICompatible(
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
 
-            for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed || trimmed === 'data: [DONE]') continue;
-                if (!trimmed.startsWith('data: ')) continue;
-
-                try {
-                    const chunk = JSON.parse(trimmed.slice(6));
-                    const delta = chunk.choices?.[0]?.delta?.content;
-                    if (delta) content += delta;
-                    const fr = chunk.choices?.[0]?.finish_reason;
-                    if (fr) finishReason = fr;
-                } catch { /* skip malformed chunk */ }
-            }
+            for (const line of lines) processLine(line);
         }
+        // Flush remaining buffer - final SSE chunk may lack trailing \n
+        if (buffer.trim()) processLine(buffer);
     } finally {
         reader.releaseLock();
     }
@@ -244,6 +247,11 @@ async function callPodbit(
     let lastError = '';
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
+        // Don't bother fetching if the signal is already dead — every call would fail instantly
+        if (signal.aborted) {
+            throw new LabError(`Podbit LLM call aborted before attempt ${attempt + 1} for "${subsystem}"`, 'llm', false);
+        }
+
         let response: Response;
         try {
             response = await fetch(url, {
@@ -257,8 +265,9 @@ async function callPodbit(
             const detail = describeNetworkError(fetchErr) || fetchErr.message || 'fetch failed';
             lastError = `Podbit unreachable at ${podbitUrl}: ${detail}`;
 
-            // AbortError = caller cancelled or job timed out — don't retry
-            if (fetchErr.name === 'AbortError') {
+            // AbortError = caller cancelled, TimeoutError = AbortSignal.timeout() fired,
+            // or signal already aborted = all retries will fail instantly. Don't retry any of these.
+            if (fetchErr.name === 'AbortError' || fetchErr.name === 'TimeoutError' || signal.aborted) {
                 throw new LabError(lastError, 'llm', false);
             }
 

@@ -334,27 +334,38 @@ function buildPrompt(spec: ExperimentSpec, previousAttempts?: Array<{ code: stri
         // Show the latest attempt in full + the error verbatim. Earlier attempts are summarised
         // (just their error) so the model can see whether it is repeating the same mistake.
         const latest = previousAttempts[previousAttempts.length - 1];
-        // Cap the resent code at ~30KB. The LLM's generated computation is appended at the END of
-        // the wrapped template (boilerplate/helpers are at the top), so when truncating we keep the
-        // TAIL — that's where any error site lives and what needs fixing.
-        const latestCode = latest.code.length > 30000
-            ? '# ... (template/imports/helpers truncated above — assume standard math-lab template is in scope)\n' + latest.code.slice(latest.code.length - 30000)
-            : latest.code;
+
+        // Extract just the computation from the full template code — the LLM only wrote this part
+        const computationMarker = '# === COMPUTATION (LLM-generated) ===';
+        const endMarker = '# === END COMPUTATION ===';
+        let latestComputation = latest.code;
+        const compStart = latest.code.indexOf(computationMarker);
+        const compEnd = latest.code.indexOf(endMarker);
+        if (compStart >= 0 && compEnd > compStart) {
+            latestComputation = latest.code.slice(compStart + computationMarker.length, compEnd).trim();
+        } else if (latest.code.length > 30000) {
+            // Fallback: show the tail (where the computation lives)
+            latestComputation = '# ... (template truncated)\n' + latest.code.slice(latest.code.length - 30000);
+        }
+
+        // Enrich error with computation-relative line numbers and code context
+        const enrichedError = enrichSandboxError(latest.error, latestComputation);
+
         const earlier = previousAttempts.slice(0, -1);
         const earlierBlock = earlier.length > 0
-            ? earlier.map((a, i) => `Earlier attempt ${i + 1} error: ${a.error.slice(0, 400)}`).join('\n') + '\n\n'
+            ? earlier.map((a, i) => `Earlier attempt ${i + 1} error: ${enrichSandboxError(a.error, '').slice(0, 400)}`).join('\n') + '\n\n'
             : '';
-        errorFeedback = `\n\nPREVIOUS FAILED ATTEMPTS — your code raised an error. READ THE TRACEBACK CAREFULLY and fix the SPECIFIC issue. Do NOT regenerate from scratch — keep what worked, fix what broke. Common mistakes to check: typos in variable names (e.g. \`disperion\` vs \`dispersion\`), referencing variables before defining them, off-by-one in indices, wrong number of arguments to a helper function.
+        errorFeedback = `\n\nPREVIOUS FAILED ATTEMPTS — your code raised an error. Fix the SPECIFIC issue. Do NOT regenerate from scratch — keep what worked, fix what broke.
 
-${earlierBlock}LATEST ATTEMPT (attempt ${previousAttempts.length}) — full code:
+${earlierBlock}YOUR PREVIOUS CODE (this is ONLY the computation you wrote — the template with imports/helpers is above it):
 \`\`\`python
-${latestCode}
+${latestComputation}
 \`\`\`
 
-LATEST ATTEMPT ERROR (verbatim traceback):
-${latest.error}
+ERROR:
+${enrichedError}
 
-YOUR JOB: Identify the exact line/identifier the error points at, fix it, and return the full corrected code. Preserve everything else from the latest attempt.`;
+YOUR JOB: Find the exact broken line shown above, fix it, return the full corrected computation code.`;
     }
 
     const cfg = getConfig();
@@ -717,6 +728,70 @@ function recoverTruncatedCode(rawResponse: string): string {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// SYNTAX PRE-CHECK — catch bad Python before it burns a sandbox attempt
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Line offset where {{computation}} is inserted in the template. */
+const TEMPLATE_COMPUTATION_LINE = (() => {
+    try {
+        const lines = getTemplate().split('\n');
+        const idx = lines.findIndex(l => l.includes('{{computation}}'));
+        return idx >= 0 ? idx : 0;
+    } catch { return 0; }
+})();
+
+/**
+ * Check generated computation for Python syntax errors WITHOUT running it.
+ * Translates template line numbers to computation-relative line numbers
+ * and includes the broken line of code in the error message.
+ *
+ * Returns null if syntax is ok, or a descriptive error string.
+ */
+function checkSyntax(computation: string, fullCode: string): string | null {
+    // Quick Node-side heuristic checks (cheaper than spawning Python)
+    const lines = computation.split('\n');
+
+    // Check for obvious indentation issues at the top level
+    // (computation code should start at indent level 0)
+    if (lines.length > 0 && /^\s+\S/.test(lines[0])) {
+        return `Syntax error: first line of computation is indented — code must start at column 0.\n`
+             + `Line 1: ${lines[0]}\n`
+             + `Fix: remove leading whitespace from all top-level statements.`;
+    }
+
+    return null; // detailed syntax check happens in the sandbox
+}
+
+/**
+ * Translate a sandbox error message so line numbers are computation-relative
+ * and the broken line of code is shown.
+ */
+function enrichSandboxError(error: string, computation: string): string {
+    // Match "line NNNN" in error messages and translate
+    const lineMatch = error.match(/line (\d+)/);
+    if (!lineMatch) return error;
+
+    const absLine = parseInt(lineMatch[1], 10);
+    const compLine = absLine - TEMPLATE_COMPUTATION_LINE;
+    const compLines = computation.split('\n');
+
+    if (compLine < 1 || compLine > compLines.length) return error;
+
+    // Show the broken line and its neighbours
+    const contextStart = Math.max(0, compLine - 3);
+    const contextEnd = Math.min(compLines.length, compLine + 2);
+    const snippet = compLines.slice(contextStart, contextEnd)
+        .map((l, i) => {
+            const lineNum = contextStart + i + 1;
+            const marker = lineNum === compLine ? ' >>>' : '    ';
+            return `${marker} ${lineNum}: ${l}`;
+        }).join('\n');
+
+    return error.replace(/line \d+/, `line ${compLine} of your code`)
+        + `\n\nYour code around the error:\n${snippet}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // CODE GENERATION
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -807,6 +882,12 @@ export async function generateCode(
             `Codegen produced empty or trivial code. Raw response (first 500 chars): ${rawResponse.slice(0, 500)}`,
             'llm', true,
         );
+    }
+
+    // Quick syntax pre-check — catch obvious errors before they burn a sandbox attempt
+    const syntaxErr = checkSyntax(computation, '');
+    if (syntaxErr) {
+        throw new LabError(syntaxErr, 'llm', true);
     }
 
     // Post-generation tautology check (only on first attempt, not retries)
