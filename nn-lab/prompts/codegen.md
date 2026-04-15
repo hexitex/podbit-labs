@@ -85,6 +85,24 @@ result = {
         },
         # For comparison experiments, add more conditions
     ],
+    "summary": {
+        # REQUIRED — the evaluator reads THIS, not the raw data.
+        # Compute these from your results BEFORE setting `result`.
+        "per_condition": {
+            "condition_label": {
+                "converged": bool,          # did loss decrease substantially?
+                "final_metric_mean": float,  # mean of final_accuracy or final_loss across runs
+                "final_metric_std": float,   # std across runs
+                "num_runs": int,
+                "notes": "any condition-specific observation",
+            },
+            # ... one entry per condition
+        },
+        "support_condition_met": bool,    # was the spec's support_condition satisfied?
+        "refutation_condition_met": bool, # was the spec's refutation_condition satisfied?
+        "verdict_suggestion": "supported" | "refuted" | "inconclusive",
+        "explanation": "2-3 sentences: what happened, which conditions converged, what the comparison shows",
+    },
     "meta": {
         "execution_time_ms": int(elapsed_ms),
         "compute": "gpu" or "cpu",

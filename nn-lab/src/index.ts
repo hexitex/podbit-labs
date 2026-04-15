@@ -53,8 +53,8 @@ interface NNLabConfig extends BaseLabConfig {
 const config = loadConfig<NNLabConfig>({
     capabilities: {
         specTypes: {
-            nn_training_profile: 'Train a single configuration and collect measurements',
-            nn_paired_comparison: 'Train 2+ configurations with matched seeds and compare',
+            nn_training_profile: 'Train a single configuration and collect measurements. Prefer synthetic datasets to isolate the mechanism under test.',
+            nn_paired_comparison: 'Train 2+ configurations with matched seeds and compare. Prefer synthetic datasets for clean controlled comparisons.',
             nn_sparsity_profile: 'Train with sparsity and measure per-layer distribution and accuracy impact',
             nn_optimizer_dynamics: 'Measure optimizer behaviour on synthetic loss surfaces',
             nn_architecture_scaling: 'Measure how metrics change with depth/width variations',
@@ -161,14 +161,10 @@ const pipeline: LabPipeline = {
         if (errorVerdict) return errorVerdict;
 
         // Experiment completed — use the core LLM evaluator to interpret
-        // results against the hypothesis. Tight timeout (5 min) so a hanging
-        // evaluation LLM call doesn't block the queue after training finishes.
-        const EVAL_TIMEOUT_MS = 5 * 60 * 1000;
-        const evalTimeout = AbortSignal.timeout(EVAL_TIMEOUT_MS);
-        const evalSignal = ctx.signal
-            ? AbortSignal.any([ctx.signal, evalTimeout])
-            : evalTimeout;
-        return coreEvaluate(ctx.spec, sandbox, { signal: evalSignal });
+        // results against the hypothesis. Use the job-level signal so
+        // evaluation gets the full remaining budget (matching math-lab).
+        // Podbit's model registry owns the per-call timeout.
+        return coreEvaluate(ctx.spec, sandbox, { signal: ctx.signal });
     },
 };
 
@@ -179,7 +175,7 @@ const pipeline: LabPipeline = {
 const lab = createLabServer<NNLabConfig>({
     name: 'nn-lab',
     version: '1.0.0',
-    description: 'Neural network training lab for Podbit. Trains real networks from declarative specs, then evaluates results against the hypothesis via LLM to produce supported/refuted/inconclusive verdicts.',
+    description: 'Neural network training lab for Podbit. Trains real networks from declarative specs, then evaluates results against the hypothesis via LLM to produce supported/refuted/inconclusive verdicts.\n\nIMPORTANT: This is a rapid-experiment lab with strict execution timeouts, not a large-scale training facility. ALWAYS prefer synthetic datasets (synthetic_quadratic, synthetic_regression) or small benchmarks (mnist, fashion_mnist) over larger datasets (cifar10). Synthetic data isolates the mechanism being tested without dataset noise or training time overhead. Only use real datasets when the hypothesis specifically requires natural image statistics or dataset-specific properties.',
 
     pipeline,
     config,

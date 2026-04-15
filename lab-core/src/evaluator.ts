@@ -90,10 +90,122 @@ export async function evaluate(
     return result;
 }
 
+/**
+ * Compact experiment output for the evaluation prompt. The evaluator needs
+ * the shape of curves (start, end, trend) and summary statistics, not raw
+ * floats per epoch or per-run detail. Without aggressive compaction,
+ * multi-condition nn-lab experiments routinely produce 40K-200K tokens,
+ * blowing past model context limits.
+ *
+ * Strategy:
+ *   1. Long numeric arrays -> {first3, last3, min, max, mean}
+ *   2. Multi-run conditions -> aggregate across runs (mean/std of final metrics)
+ *   3. Hard cap on serialized JSON size (~8K chars, ~2K tokens)
+ */
+function compactOutput(obj: any, depth = 0): any {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj !== 'object') return obj;
+
+    if (Array.isArray(obj)) {
+        // Compact long numeric arrays to summary form
+        if (obj.length > 5 && obj.every((v: any) => typeof v === 'number')) {
+            const first3 = obj.slice(0, 3).map((v: number) => +v.toFixed(4));
+            const last3 = obj.slice(-3).map((v: number) => +v.toFixed(4));
+            const min = +Math.min(...obj).toFixed(4);
+            const max = +Math.max(...obj).toFixed(4);
+            const mean = +(obj.reduce((a: number, b: number) => a + b, 0) / obj.length).toFixed(4);
+            return { _summary: true, length: obj.length, first3, last3, min, max, mean };
+        }
+
+        // Detect nn-lab conditions array: [{label, runs: [...]}]
+        if (obj.length > 0 && obj[0]?.label && Array.isArray(obj[0]?.runs)) {
+            return obj.map((cond: any) => aggregateCondition(cond));
+        }
+
+        // Recurse into array elements
+        return obj.map((v: any) => compactOutput(v, depth + 1));
+    }
+
+    // Recurse into object values
+    const result: Record<string, any> = {};
+    for (const [k, v] of Object.entries(obj)) {
+        result[k] = compactOutput(v, depth + 1);
+    }
+    return result;
+}
+
+/** Collapse multiple runs in a condition to aggregated stats. */
+function aggregateCondition(cond: any): any {
+    const runs = Array.isArray(cond.runs) ? cond.runs : [];
+    if (runs.length === 0) return { label: cond.label, runs: [] };
+
+    // Separate successful runs from errored ones
+    const good = runs.filter((r: any) => !r.error);
+    const errors = runs.filter((r: any) => r.error);
+
+    if (good.length === 0) {
+        return { label: cond.label, all_runs_failed: true, errors: errors.map((r: any) => r.error) };
+    }
+
+    // Aggregate numeric scalars across runs (mean + std)
+    const agg: Record<string, any> = { label: cond.label, num_runs: good.length };
+    if (errors.length > 0) agg.failed_runs = errors.length;
+
+    // Aggregate final_accuracy / final_loss
+    for (const key of ['final_accuracy', 'final_loss']) {
+        const vals = good.map((r: any) => r[key]).filter((v: any) => typeof v === 'number');
+        if (vals.length > 0) {
+            const mean = vals.reduce((a: number, b: number) => a + b, 0) / vals.length;
+            const std = Math.sqrt(vals.reduce((a: number, b: number) => a + (b - mean) ** 2, 0) / vals.length);
+            agg[key] = { mean: +mean.toFixed(4), std: +std.toFixed(4) };
+        }
+    }
+
+    // Aggregate loss curves: take mean across runs for train/val
+    const first = good[0];
+    if (first?.loss_curve) {
+        const aggCurve: Record<string, any> = {};
+        for (const split of ['train', 'val']) {
+            const curves = good.map((r: any) => r.loss_curve?.[split]).filter(Array.isArray);
+            if (curves.length > 0) {
+                const len = Math.min(...curves.map((c: any[]) => c.length));
+                const meanCurve = Array.from({ length: len }, (_, i) =>
+                    +(curves.reduce((s: number, c: any[]) => s + (c[i] ?? 0), 0) / curves.length).toFixed(4));
+                aggCurve[split] = compactOutput(meanCurve);
+            }
+        }
+        agg.loss_curve = aggCurve;
+    }
+
+    // Include a compact version of the first run's other measurements as representative
+    const skipKeys = new Set(['seed', 'loss_curve', 'final_accuracy', 'final_loss', 'error']);
+    const extra: Record<string, any> = {};
+    for (const [k, v] of Object.entries(first)) {
+        if (!skipKeys.has(k)) extra[k] = compactOutput(v);
+    }
+    if (Object.keys(extra).length > 0) agg.measurements = extra;
+
+    return agg;
+}
+
+/** Hard-cap JSON to a max character count, truncating with a note if exceeded. */
+function capJson(obj: any, maxChars = 8000): string {
+    const full = JSON.stringify(obj, null, 2);
+    if (full.length <= maxChars) return full;
+    return full.slice(0, maxChars) + '\n... [truncated — full results in artifacts]';
+}
+
 async function llmEvaluate(spec: ExperimentSpec, output: Record<string, any>, measurementErrors: string[], signal?: AbortSignal): Promise<LabVerdict> {
     const errorWarning = measurementErrors.length > 0
         ? `\n\nNote — ${measurementErrors.length} measurement(s) errored and contain no valid data:\n${measurementErrors.map(e => `  - ${e}`).join('\n')}\nThese error objects are not evidence either way. If a critical measurement is missing, prefer "inconclusive" over a verdict drawn from the surviving measurements alone — but use your judgment about which measurements were actually load-bearing for the hypothesis.\n`
         : '';
+
+    // Prefer the code's own summary over raw data - it's much smaller and
+    // already aggregated by the experiment code that understood the measurements.
+    const hasSummary = output.summary && typeof output.summary === 'object';
+    const resultsBlock = hasSummary
+        ? `EXPERIMENT SUMMARY (computed by the experiment code):\n${capJson(output.summary, 4000)}\n\nRAW RESULTS (compacted):\n${capJson(compactOutput(output), 4000)}`
+        : `COMPUTED RESULTS:\n${capJson(compactOutput(output))}`;
 
     const prompt = `You are a scientific referee evaluating the results of a computational experiment against a hypothesis. Your job is to determine what was actually tested, what was assumed, and what remains open.
 
@@ -105,8 +217,9 @@ ${spec.hypothesis}
 SETUP:
 ${JSON.stringify(spec.setup, null, 2)}
 
-COMPUTED RESULTS:
-${JSON.stringify(output, null, 2)}
+${resultsBlock}
+
+Note: The experiment code produced a self-assessment in the summary. Verify its reasoning against the raw data, but use it as your starting point. Full data is preserved in artifacts.
 ${errorWarning}
 ## Your evaluation must cover:
 
@@ -183,8 +296,3 @@ Respond with JSON:
     }
 }
 
-function parseNum(val: any): number | null {
-    if (typeof val === 'number' && !isNaN(val)) return val;
-    if (typeof val === 'string') { const n = parseFloat(val); if (!isNaN(n)) return n; }
-    return null;
-}

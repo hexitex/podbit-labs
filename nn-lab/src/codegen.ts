@@ -75,8 +75,8 @@ BUDGET (guidance — exceed when the hypothesis genuinely needs it, but stay ins
   max_epochs: ${maxEpochs}     # default cap; raise it in the spec if convergence requires more
   max_runs: ${maxRuns}          # number of seeds per condition; more = better statistics, more GPU
   artifact_dir: ${artifactDir.replace(/\\/g, '/')}
-  Dataset: synthetic datasets are fastest and isolate dynamics; MNIST/Fashion-MNIST/CIFAR-10 are all available — pick whichever the hypothesis actually needs.
-  Model: pick the smallest architecture that can express the hypothesis. Scale up when scale itself is the variable.
+  Dataset: DEFAULT TO SYNTHETIC (synthetic_regression or synthetic_quadratic). Only use MNIST/Fashion-MNIST/CIFAR-10 when the hypothesis is specifically about real image data, channel structure, or classification on natural images. Claims about optimizers, gradients, loss surfaces, convergence, architectures, regularization, or training dynamics do NOT need real datasets — synthetic data isolates the effect and runs in seconds.
+  Model: pick the smallest architecture that can express the hypothesis. A 2-3 layer MLP is sufficient for most optimizer/gradient/convergence claims. Scale up only when the hypothesis is about depth, width, residual connections, or attention.
   Target wall time: aim for ~2 minutes per run when possible — longer is fine when justified.
 ${errorFeedback}`;
 }

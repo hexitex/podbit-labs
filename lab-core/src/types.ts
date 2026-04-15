@@ -144,7 +144,7 @@ export interface ModelSlotConfig {
     endpoint: string;
     model: string;
     apiKey: string;
-    maxTokens: number;
+    maxTokens?: number;
     temperature: number;
     timeoutMs: number;
     systemPrompt?: string;

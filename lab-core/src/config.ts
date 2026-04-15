@@ -51,7 +51,7 @@ export function loadModelSlot(fileSlot: any, envPrefix: string, defaults: Partia
         endpoint: process.env[`${envPrefix}_ENDPOINT`] || fileSlot?.endpoint || defaults.endpoint || 'http://localhost:11434/v1',
         model: process.env[`${envPrefix}_MODEL`] || fileSlot?.model || defaults.model || 'qwen2.5-coder:14b',
         apiKey: process.env[`${envPrefix}_API_KEY`] || fileSlot?.apiKey || defaults.apiKey || 'ollama',
-        maxTokens: parseInt(process.env[`${envPrefix}_MAX_TOKENS`] || '', 10) || fileSlot?.maxTokens || defaults.maxTokens || 4096,
+        maxTokens: parseInt(process.env[`${envPrefix}_MAX_TOKENS`] || '', 10) || fileSlot?.maxTokens || defaults.maxTokens || undefined,
         temperature: parseFloat(process.env[`${envPrefix}_TEMPERATURE`] || '') || (fileSlot?.temperature ?? (defaults.temperature ?? 0.15)),
         timeoutMs: fileSlot?.timeoutMs || defaults.timeoutMs || 0, // 0 = use job remaining time
         systemPrompt: fileSlot?.systemPrompt || defaults.systemPrompt || undefined,

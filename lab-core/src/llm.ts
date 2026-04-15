@@ -56,7 +56,7 @@ export function loadSystemPrompt(pathOrInline?: string): string | undefined {
 
 // Provider internals
 interface ProviderCallOptions {
-    maxTokens: number;
+    maxTokens?: number;
     temperature: number;
     jsonMode: boolean;
     signal?: AbortSignal;
@@ -108,7 +108,8 @@ async function callOpenAICompatible(
     messages: Array<{ role: string; content: string }>,
     opts: ProviderCallOptions,
 ): Promise<string> {
-    const body: Record<string, any> = { model, messages, max_tokens: opts.maxTokens, temperature: opts.temperature, stream: true };
+    const body: Record<string, any> = { model, messages, temperature: opts.temperature, stream: true };
+    if (opts.maxTokens != null) body.max_tokens = opts.maxTokens;
     if (opts.noThink) { body.enable_thinking = false; body.chat_template_kwargs = { enable_thinking: false }; }
 
     const url = buildOpenAICompatibleChatUrl(endpoint);
@@ -181,7 +182,7 @@ async function callAnthropic(
 ): Promise<string> {
     const systemMsgs = messages.filter(m => m.role === 'system');
     const nonSystemMsgs = messages.filter(m => m.role !== 'system');
-    const body: Record<string, any> = { model, max_tokens: opts.maxTokens, messages: nonSystemMsgs };
+    const body: Record<string, any> = { model, max_tokens: opts.maxTokens || 16384, messages: nonSystemMsgs };
     if (systemMsgs.length > 0) body.system = systemMsgs.map(m => m.content).join('\n\n');
 
     const url = endpoint.endsWith('/v1/messages') ? endpoint : `${endpoint.replace(/\/+$/, '')}/v1/messages`;
