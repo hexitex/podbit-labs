@@ -53,12 +53,12 @@ interface NNLabConfig extends BaseLabConfig {
 const config = loadConfig<NNLabConfig>({
     capabilities: {
         specTypes: {
-            nn_training_profile: 'Train a single configuration and collect measurements. Prefer synthetic datasets to isolate the mechanism under test.',
-            nn_paired_comparison: 'Train 2+ configurations with matched seeds and compare. Prefer synthetic datasets for clean controlled comparisons.',
-            nn_sparsity_profile: 'Train with sparsity and measure per-layer distribution and accuracy impact',
-            nn_optimizer_dynamics: 'Measure optimizer behaviour on synthetic loss surfaces',
-            nn_architecture_scaling: 'Measure how metrics change with depth/width variations',
-            nn_codegen: 'Generate custom PyTorch training code via LLM. For experiments beyond fixed menus — custom architectures, activations, loss functions, optimizers, training procedures, or novel measurements. Provide a hypothesis and experimental parameters.',
+            nn_training_profile: 'Train a single configuration and collect measurements. Prefer synthetic datasets to isolate the mechanism under test. Required setup: architecture{model_type(mlp|cnn|cnn_depthwise_separable|resnet|transformer_tiny), depth(1-50), width(1-4096), optional modifications[bottleneck|dropout|weight_decay|batch_norm|layer_norm]}, training{dataset(mnist|cifar10|fashion_mnist|synthetic_quadratic|synthetic_regression), optimizer(sgd|adam|rmsprop|lbfgs), epochs(1-200 synthetic/1-50 real), optional lr_schedule(constant|cosine|cyclical|step), optional batch_size(1-4096), optional runs(1-10, default 3)}, measurements[(loss_curve|convergence_epoch|final_accuracy|sparsity_by_layer|gradient_stats_by_layer|effective_lr_by_layer|weight_norm_by_layer|hessian_top_eigenvalue|wall_clock_time)].',
+            nn_paired_comparison: 'Train 2+ configurations with matched seeds and compare. Prefer synthetic datasets for clean controlled comparisons. Required setup: architecture{model_type, depth, width} (same as nn_training_profile), training{dataset, optimizer, epochs}, measurements[], PLUS conditions[2-10 items, each with label(string) and optional architecture/training overrides], optional comparison_measurements[(convergence_speed_ratio|final_accuracy_difference|sparsity_distribution_divergence|gradient_stat_divergence)]. The base architecture/training define defaults; each condition overrides specific fields.',
+            nn_sparsity_profile: 'Train with sparsity and measure per-layer distribution and accuracy impact. Same required setup as nn_training_profile, PLUS architecture.sparsity{ratio(0-0.99), method(unstructured|structured_2_4|magnitude)} is required.',
+            nn_optimizer_dynamics: 'Measure optimizer behaviour on synthetic loss surfaces. Same required setup as nn_training_profile. Prefer synthetic datasets (synthetic_quadratic, synthetic_regression).',
+            nn_architecture_scaling: 'Measure how metrics change with depth/width variations. Same required setup as nn_training_profile, PLUS conditions[2-10 items with label and architecture/training overrides] required (same as nn_paired_comparison).',
+            nn_codegen: 'Generate custom PyTorch training code via LLM. For experiments beyond fixed menus - custom architectures, activations, loss functions, optimizers, training procedures, or novel measurements. Required: hypothesis(string, min 10 chars). Optional setup.constraints{max_epochs(1-200), max_runs(1-10)}. No fixed architecture/training/measurements schema - the LLM writes arbitrary code.',
         },
         queueLimit: 10,
         artifactTtlSeconds: 604800,
