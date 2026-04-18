@@ -75,6 +75,7 @@ function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
 
 function stripThinkingBlocks(text: string): string {
     let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    cleaned = cleaned.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
     cleaned = cleaned.replace(/^<think>[\s\S]*$/gi, '').trim();
     return cleaned || text;
 }
@@ -341,7 +342,7 @@ export async function callLlm(prompt: string, options: LlmCallOptions = {}): Pro
             jsonSchema: options.jsonSchema,
             signal: options.signal,
         });
-        if (slot.stripThinking) {
+        {
             const stripped = stripThinkingBlocks(result);
             if (stripped !== result) { logger.info({ role, originalLen: result.length, strippedLen: stripped.length }, 'Stripped thinking blocks'); result = stripped; }
         }
@@ -373,7 +374,7 @@ export async function callLlm(prompt: string, options: LlmCallOptions = {}): Pro
     try {
         logger.debug({ role, model: slot.model, endpoint: slot.endpoint, promptLen: prompt.length }, 'LLM call starting');
         let result = await dispatchCall(slot, messages, callOpts);
-        if (slot.stripThinking) {
+        {
             const stripped = stripThinkingBlocks(result);
             if (stripped !== result) { logger.info({ role, originalLen: result.length, strippedLen: stripped.length }, 'Stripped thinking blocks'); result = stripped; }
         }
