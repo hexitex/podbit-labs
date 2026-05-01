@@ -57,6 +57,14 @@ Available datasets and when each is a natural fit:
 
 Model size and training length are yours to choose. A small MLP on synthetic data answers many structural claims; reach for ResNet/Transformer-Tiny when the hypothesis is about depth, residual structure, or attention. Train for as many epochs as the signal needs and the timeout allows.
 
+## Compound Causal Variables — ratios and products
+
+When the hypothesis names a ratio or product as the causal variable (for example `η/B`, `lr / batch_size`, `η·σ²`, or `lr * grad_var`), design conditions around that compound variable, not around one component alone:
+- Identify the numerator/denominator or product components explicitly in the code comments and condition labels.
+- Conditions must vary at least one component so the named ratio/product actually changes.
+- Strongly prefer varying both components together, in opposite directions for ratios, while keeping each component in a sensible trainable range.
+- If only one component is varied, include a control condition that holds the ratio/product constant by varying the other component too; otherwise the comparison is confounded with the single varied component.
+
 ## Using Runner Utilities vs Custom Code
 
 You can freely mix runner utilities with your own code. Use the utilities when they cover what you need — write custom code when they don't. For example:

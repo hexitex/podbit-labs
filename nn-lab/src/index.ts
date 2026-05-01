@@ -133,6 +133,47 @@ function preCheckResult(_spec: any, sandbox: SandboxResult): LabVerdict | null {
     return null;
 }
 
+function applyConvergenceGate(sandbox: SandboxResult, verdict: LabVerdict): LabVerdict {
+    const perCondition = sandbox.parsedOutput?.result?.summary?.per_condition;
+    if (!perCondition || typeof perCondition !== 'object') return verdict;
+
+    const convergenceStates = Object.values(perCondition)
+        .map((condition: any) => condition?.converged)
+        .filter((converged): converged is boolean => typeof converged === 'boolean');
+
+    if (convergenceStates.length === 0) return verdict;
+
+    const failedCount = convergenceStates.filter(converged => !converged).length;
+    if (failedCount === convergenceStates.length) {
+        const note = 'all conditions failed to converge — comparison is between un-trained models';
+        return {
+            ...verdict,
+            verdict: 'inconclusive',
+            confidence: 0,
+            details: verdict.details ? `${note}. ${verdict.details}` : note,
+            structuredDetails: {
+                ...verdict.structuredDetails,
+                convergenceWarning: note,
+            },
+        };
+    }
+
+    if (failedCount > 0) {
+        const note = `${failedCount}/${convergenceStates.length} conditions failed to converge; confidence capped at 0.5`;
+        return {
+            ...verdict,
+            confidence: Math.min(verdict.confidence, 0.5),
+            details: verdict.details ? `${verdict.details} [${note}]` : note,
+            structuredDetails: {
+                ...verdict.structuredDetails,
+                convergenceWarning: note,
+            },
+        };
+    }
+
+    return verdict;
+}
+
 // =============================================================================
 // PIPELINE
 // =============================================================================
@@ -164,7 +205,8 @@ const pipeline: LabPipeline = {
         // results against the hypothesis. Use the job-level signal so
         // evaluation gets the full remaining budget (matching math-lab).
         // Podbit's model registry owns the per-call timeout.
-        return coreEvaluate(ctx.spec, sandbox, { signal: ctx.signal });
+        const verdict = await coreEvaluate(ctx.spec, sandbox, { signal: ctx.signal });
+        return applyConvergenceGate(sandbox, verdict);
     },
 };
 
